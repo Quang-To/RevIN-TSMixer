@@ -1,1 +1,22 @@
+# Python cache
 __pycache__/
+*.pyc
+*.pyo
+
+# virtual env
+venv/
+.env/
+
+# IDE
+.vscode/
+.idea/
+
+# dataset
+data/raw/
+
+# model outputs
+checkpoints/
+logs/
+
+# system
+.DS_Store
