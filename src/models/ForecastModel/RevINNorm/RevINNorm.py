@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 class RevINNorm(nn.Module):
-    def __init__(self, num_features: int = 5, eps: float = 1e-5, affine: bool = True):
+    def __init__(self, num_features: int = 6, eps: float = 1e-5, affine: bool = True):
         super().__init__()
         self.eps = eps
         self.affine = affine

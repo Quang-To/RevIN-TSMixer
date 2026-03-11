@@ -6,9 +6,9 @@ from src.models.ForecastModel.MixingLayer.MixerBlock import MixerBlock
 from src.models.ForecastModel.TemporalProjectionLayer.TemporalProjectionLayer import TemporalProjectionLayer
 
 class ForecastModel(nn.Module):
-    def __init__(self, seq_length: int, num_features: int, ff_dim: int, dropout: float, pred_len: int, n_block: int):
+    def __init__(self, seq_length: int, ff_dim: int, dropout: float, pred_len: int, n_block: int):
         super().__init__()
-        self.rev_norm = RevINNorm(num_features)
+        self.rev_norm = RevINNorm()
 
         self.mixer_blocks = nn.ModuleList(
             [MixerBlock(seq_length=seq_length, ff_dim=ff_dim, dropout=dropout) for _ in range(n_block)]
@@ -21,4 +21,4 @@ class ForecastModel(nn.Module):
             x = block(x)
         x = self.temporal_projection(x)
         x = self.rev_norm(x, mode="denorm")
-        return x
+        return x[:, :, -1]

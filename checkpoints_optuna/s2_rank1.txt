@@ -1,0 +1,21 @@
+Scenario 2 — Rank 1
+=============================================
+
+── Hyperparameters ──────────────────────────
+  seq_length  : 9
+  n_block     : 2
+  dropout     : 0.5
+  batch_size  : 4
+  ff_dim      : 64
+  lr          : 0.0001
+
+── Validation metric ────────────────────────
+  TC_min      : 262881.6456
+
+── Test metrics ─────────────────────────────
+  MAE         : 29652.1777
+  MSE         : 1379066752.0000
+  RMSE        : 37135.7891
+  MAPE (%)    : 8.5361
+  TC_min      : 268496.37
+  c_s*        : 1.5600
