@@ -1,26 +1,3 @@
-"""
-main.py — unified entry point for RevIN-TSMixer.
-
-Modes
------
-train   Train a single configuration for scenario 1 or 2.
-optuna  Run Optuna hyperparameter search and save top-3 checkpoints.
-eval    Load a saved checkpoint and report test metrics.
-
-Examples
---------
-# Hyperparameter search (both scenarios, 50 trials each)
-python main.py optuna --scenario 1 --n_trials 50
-python main.py optuna --scenario 2 --n_trials 50
-
-# Train a single configuration
-python main.py train --scenario 1
-python main.py train --scenario 2 --seq_length 9 --n_block 2 --dropout 0.5 \
-    --batch_size 4 --ff_dim 64 --lr 1e-4 --epochs 100 --patience 10
-
-# Evaluate a saved checkpoint
-python main.py eval --checkpoint checkpoints_optuna/s2_rank1.pt
-"""
 from src.trainers.RevINMixer import Scenario1Trainer, Scenario2Trainer
 
 # ── Configuration ─────────────────────────────────────────────────────────────
