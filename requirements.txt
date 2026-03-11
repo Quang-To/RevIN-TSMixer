@@ -1,5 +1,9 @@
+torch
+numpy
 pandas
+scipy
+optuna
+scikit-learn
 matplotlib
 seaborn
-sklearn
 xgboost
