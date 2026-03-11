@@ -1,9 +1,12 @@
 torch
 numpy
-pandas
 scipy
+pandas
 optuna
 scikit-learn
+xgboost
 matplotlib
 seaborn
-xgboost
+jupyter>
+notebook
+ipykernel
