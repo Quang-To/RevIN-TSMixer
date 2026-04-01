@@ -5,6 +5,7 @@ from torch.optim import Adam
 from pathlib import Path
 
 from src.utils.seed import set_seed
+from src.utils.visualization import TrainingVisualizer
 
 from src.models.ForecastModel.ForecastModel import ForecastModel
 from src.data.dataset import TimeSeriesData
@@ -55,7 +56,7 @@ def collect_predictions(model, loader, device):
 class BaseTrainer:
     def __init__(self, seq_length, ff_dim, dropout, pred_len,
                  n_block, batch_size, lr, epochs, patience,
-                 holding_cost, lead_time, ordering_cost):
+                 holding_cost, lead_time, ordering_cost, scenario: int = 1):
         self.seq_length    = seq_length
         self.ff_dim        = ff_dim
         self.dropout       = dropout
@@ -68,7 +69,9 @@ class BaseTrainer:
         self.holding_cost  = holding_cost
         self.lead_time     = lead_time
         self.ordering_cost = ordering_cost
+        self.scenario      = scenario
         self.device        = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.visualizer    = TrainingVisualizer(save_dir="results")
 
     def _build_model(self):
         return ForecastModel(self.seq_length, self.ff_dim, self.dropout,
@@ -103,7 +106,7 @@ class BaseTrainer:
         model     = self._build_model()
         optimizer = Adam(model.parameters(), lr=self.lr)
 
-        best_val, best_state, no_improve = float("inf"), None, 0
+        best_val, best_state, no_improve, best_epoch = float("inf"), None, 0, 0
 
         for epoch in range(1, self.epochs + 1):
             t0 = time.time()
@@ -122,6 +125,9 @@ class BaseTrainer:
 
             # validate
             val_metric = self._val_metric(model, val_loader)
+            
+            # Log metrics for visualization
+            self.visualizer.log_epoch(epoch, train_loss, val_metric)
 
             print(f"Epoch {epoch:>4} | train_mape={train_loss:>8.4f}% | "
                   f"val={val_metric:>10.4f} | {time.time()-t0:.1f}s")
@@ -129,6 +135,7 @@ class BaseTrainer:
             if val_metric < best_val:
                 best_val   = val_metric
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                best_epoch = epoch
                 no_improve = 0
             else:
                 no_improve += 1
@@ -140,6 +147,19 @@ class BaseTrainer:
             model.load_state_dict(best_state)
         pred, true = collect_predictions(model, test_loader, self.device)
         metrics = self._print_results(pred, true)
+        
+        # Generate visualizations
+        print("\n" + "="*50)
+        print(f"  Generating visualizations for Scenario {self.scenario}...")
+        print("="*50)
+        self.visualizer.plot_training_history(scenario=self.scenario)
+        self.visualizer.plot_predictions_vs_actual(pred, true, scenario=self.scenario)
+        self.visualizer.plot_test_metrics(metrics, scenario=self.scenario)
+        self.visualizer.plot_comparison_with_baseline(pred, true, scenario=self.scenario)
+        self.visualizer.plot_metrics_summary(metrics, epoch=best_epoch, scenario=self.scenario)
+        print(f"✓ All plots saved to: results/")
+        print("="*50)
+        
         return best_val, best_state, metrics
 
 class Scenario1Trainer(BaseTrainer):
@@ -153,7 +173,7 @@ class Scenario1Trainer(BaseTrainer):
                  holding_cost=2, lead_time=2, ordering_cost=50_000):
         super().__init__(seq_length, ff_dim, dropout, pred_len, n_block,
                          batch_size, lr, epochs, patience,
-                         holding_cost, lead_time, ordering_cost)
+                         holding_cost, lead_time, ordering_cost, scenario=1)
 
     @torch.no_grad()
     def _val_metric(self, model, loader) -> float:
@@ -175,7 +195,7 @@ class Scenario2Trainer(BaseTrainer):
                  holding_cost=2, lead_time=2, ordering_cost=50_000):
         super().__init__(seq_length, ff_dim, dropout, pred_len, n_block,
                          batch_size, lr, epochs, patience,
-                         holding_cost, lead_time, ordering_cost)
+                         holding_cost, lead_time, ordering_cost, scenario=2)
 
     @torch.no_grad()
     def _val_metric(self, model, loader) -> float:

@@ -26,7 +26,7 @@ class RevINNorm(nn.Module):
             if self.mean is None or self.std is None:
                 raise RuntimeError("norm must be called before denorm")
             if self.affine:
-                x = (x - self.beta) / (self.gamma + self.eps)
+                x = (x - self.beta) / self.gamma
             x = x * (self.std + self.eps) + self.mean
             return x
         else:

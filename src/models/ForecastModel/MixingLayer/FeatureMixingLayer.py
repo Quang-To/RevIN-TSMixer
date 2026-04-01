@@ -4,7 +4,7 @@ import torch.nn as nn
 class FeatureMixingLayer(nn.Module):
     def __init__(self, ff_dim: int, dropout: float, num_features: int = 6):
         super().__init__()
-        self.norm = nn.LayerNorm(num_features)
+        self.batch_norm = nn.BatchNorm1d(num_features)
         self.mlp = nn.Sequential(
             nn.Linear(num_features, ff_dim),
             nn.ReLU(),
@@ -15,7 +15,9 @@ class FeatureMixingLayer(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
-        x = self.norm(x)
+        x = x.transpose(1, 2)      
+        x = self.batch_norm(x)
+        x = x.transpose(1, 2)     
         x = self.mlp(x)
         x = x + residual
         return x
