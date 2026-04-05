@@ -3,19 +3,19 @@ Scenario 2 — Rank 3
 
 ── Hyperparameters ──────────────────────────
   seq_length  : 9
-  n_block     : 2
-  dropout     : 0.3
+  n_block     : 1
+  dropout     : 0.5
   batch_size  : 4
   ff_dim      : 64
-  lr          : 0.0001
+  lr          : 1e-05
 
 ── Validation metric ────────────────────────
-  TC_min      : 268472.6780
+  TC_min      : 315635.8367
 
 ── Test metrics ─────────────────────────────
-  MAE         : 35530.6367
-  MSE         : 1677864832.0000
-  RMSE        : 40961.7500
-  MAPE (%)    : 10.2779
-  TC_min      : 282669.48
-  c_s*        : 1.5500
+  MAE         : 57157.3398
+  MSE         : 4436268544.0000
+  RMSE        : 66605.3203
+  MAPE (%)    : 16.3897
+  TC_min      : 362812.66
+  c_s*        : 1.6400

@@ -14,8 +14,8 @@ FF_DIM       = 64       # hidden dimension of FeatureMixingLayer
 PRED_LEN     = 3        # forecast horizon (months ahead)
 
 # Training hyperparameters
-BATCH_SIZE   = 4
-LR           = 1e-4     # learning rate
+BATCH_SIZE   = 2
+LR           = 1e-5     # learning rate
 EPOCHS       = 1000
 PATIENCE     = 100      # early-stopping patience
 
@@ -41,8 +41,10 @@ def main():
         holding_cost=HOLDING_COST,
         lead_time=LEAD_TIME,
         ordering_cost=ORDERING_COST,
+        generate_plots=True,  # Generate visualizations during training
     )
     best_val, best_state, metrics = trainer.train()
+    trainer.generate_visualizations(metrics)
 
     val_label = "MAPE (%)" if SCENARIO == 1 else "TC_min"
     print("\n" + "=" * 50)

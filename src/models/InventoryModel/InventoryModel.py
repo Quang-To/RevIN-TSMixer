@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.stats import norm
+from typing import Optional
 
 class InventoryModel:
     def __init__(self, shortage_cost: float, holding_cost: int = 2, lead_time: int = 2, ordering_cost: int = 50000):
@@ -8,9 +9,10 @@ class InventoryModel:
         self.lead_time = lead_time
         self.ordering_cost = ordering_cost
 
-    def total_cost(self, demand_forecast: np.ndarray) -> float:
+    def total_cost(self, demand_forecast: np.ndarray, forecast_errors: np.ndarray) -> float:
         self.muy = np.mean(demand_forecast)
-        self.sigma = np.std(demand_forecast)
+        self.sigma = np.std(forecast_errors)
+        
         self.order_quantity = np.sqrt(2 * self.ordering_cost * self.muy / self.holding_cost)
 
         self.alpha = 1 - (self.holding_cost * self.order_quantity) / (self.shortage_cost * self.muy)

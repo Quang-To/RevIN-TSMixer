@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from torch.optim import Adam
 from pathlib import Path
+from typing import Optional
 
 from src.utils.seed import set_seed
 from src.utils.visualization import TrainingVisualizer
@@ -31,24 +32,36 @@ def compute_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> dict:
     return dict(MAE=mae, MSE=mse, RMSE=rmse, MAPE=mape)
 
 def sweep_tc(pred: np.ndarray, holding_cost=2, lead_time=2,
-             ordering_cost=50_000, n_steps=1000) -> tuple:
-    """Sweep c_s ∈ (0, 10] → return (TC_min, c_s*)."""
+             ordering_cost=50_000, forecast_errors: Optional[np.ndarray] = None, n_steps=1000) -> tuple:
     pred = np.clip(pred, 1.0, None)
     best_tc, best_cs = float("inf"), None
     for cs in np.linspace(0.01, 10.0, n_steps):
-        tc = InventoryModel(cs, holding_cost, lead_time, ordering_cost).total_cost(pred)
+        tc = InventoryModel(cs, holding_cost, lead_time, ordering_cost).total_cost(pred, forecast_errors=forecast_errors)
         if np.isfinite(tc) and tc < best_tc:
             best_tc, best_cs = tc, cs
     return best_tc, best_cs
 
 @torch.no_grad()
 def collect_predictions(model, loader, device):
+    """
+    Collect predictions from model on loader.
+    
+    Returns:
+        pred: Predicted values
+        true: Actual values  
+        errors: Forecast errors (actual - predicted) for uncertainty calculation
+    """
     model.eval()
     preds, trues = [], []
     for x, y in loader:
         preds.append(model(x.to(device)).cpu().numpy())
         trues.append(y.numpy())
-    return np.concatenate(preds).flatten(), np.concatenate(trues).flatten()
+    
+    pred_array = np.concatenate(preds).flatten()
+    true_array = np.concatenate(trues).flatten()
+    errors = true_array - pred_array  # ← Forecast errors
+    
+    return pred_array, true_array, errors
 
 
 # ── Base Trainer ──────────────────────────────────────────────────────────────
@@ -56,7 +69,7 @@ def collect_predictions(model, loader, device):
 class BaseTrainer:
     def __init__(self, seq_length, ff_dim, dropout, pred_len,
                  n_block, batch_size, lr, epochs, patience,
-                 holding_cost, lead_time, ordering_cost, scenario: int = 1):
+                 holding_cost, lead_time, ordering_cost, scenario: int = 1, generate_plots: bool = False):
         self.seq_length    = seq_length
         self.ff_dim        = ff_dim
         self.dropout       = dropout
@@ -70,8 +83,9 @@ class BaseTrainer:
         self.lead_time     = lead_time
         self.ordering_cost = ordering_cost
         self.scenario      = scenario
+        self.generate_plots = generate_plots
         self.device        = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.visualizer    = TrainingVisualizer(save_dir="results")
+        self.visualizer    = TrainingVisualizer(save_dir="results") if generate_plots else None
 
     def _build_model(self):
         return ForecastModel(self.seq_length, self.ff_dim, self.dropout,
@@ -85,17 +99,11 @@ class BaseTrainer:
         """Validation metric — overridden per scenario."""
         raise NotImplementedError
 
-    def _print_results(self, pred, true):
+    def _compute_results(self, pred, true, errors=None):
         m = compute_metrics(pred, true)
         tc_min, cs_star = sweep_tc(pred, self.holding_cost,
-                                   self.lead_time, self.ordering_cost)
-        print(f"\n── Results ──────────────────────────────────────")
-        print(f"  MAE   : {m['MAE']:>15.4f}")
-        print(f"  MSE   : {m['MSE']:>15.4f}")
-        print(f"  RMSE  : {m['RMSE']:>15.4f}")
-        print(f"  MAPE  : {m['MAPE']:>14.4f} %")
-        print(f"  TC_min: {tc_min:>15.2f}")
-        print(f"  c_s*  : {cs_star:>15.4f}")
+                                   self.lead_time, self.ordering_cost, 
+                                   forecast_errors=errors)
         return {**m, "TC_min": tc_min, "c_s_star": cs_star}
 
     def train(self) -> tuple:
@@ -107,6 +115,9 @@ class BaseTrainer:
         optimizer = Adam(model.parameters(), lr=self.lr)
 
         best_val, best_state, no_improve, best_epoch = float("inf"), None, 0, 0
+        self.test_pred = None
+        self.test_true = None
+        self.best_epoch_num = 0
 
         for epoch in range(1, self.epochs + 1):
             t0 = time.time()
@@ -127,10 +138,12 @@ class BaseTrainer:
             val_metric = self._val_metric(model, val_loader)
             
             # Log metrics for visualization
-            self.visualizer.log_epoch(epoch, train_loss, val_metric)
+            if self.visualizer:
+                self.visualizer.log_epoch(epoch, train_loss, val_metric)
 
-            print(f"Epoch {epoch:>4} | train_mape={train_loss:>8.4f}% | "
-                  f"val={val_metric:>10.4f} | {time.time()-t0:.1f}s")
+            # Print every 10 epochs only
+            if epoch % 10 == 0 or epoch == 1:
+                print(f"Epoch {epoch:>4} | train={train_loss:>7.4f}% | val={val_metric:>9.2f}")
 
             if val_metric < best_val:
                 best_val   = val_metric
@@ -140,27 +153,32 @@ class BaseTrainer:
             else:
                 no_improve += 1
                 if no_improve >= self.patience:
-                    print(f"\nEarly stop at epoch {epoch}.")
+                    pass  
                     break
 
         if best_state is not None:
             model.load_state_dict(best_state)
-        pred, true = collect_predictions(model, test_loader, self.device)
-        metrics = self._print_results(pred, true)
+        pred, true, errors = collect_predictions(model, test_loader, self.device)
+        metrics = self._compute_results(pred, true, errors)
         
-        # Generate visualizations
-        print("\n" + "="*50)
-        print(f"  Generating visualizations for Scenario {self.scenario}...")
-        print("="*50)
-        self.visualizer.plot_training_history(scenario=self.scenario)
-        self.visualizer.plot_predictions_vs_actual(pred, true, scenario=self.scenario)
-        self.visualizer.plot_test_metrics(metrics, scenario=self.scenario)
-        self.visualizer.plot_comparison_with_baseline(pred, true, scenario=self.scenario)
-        self.visualizer.plot_metrics_summary(metrics, epoch=best_epoch, scenario=self.scenario)
-        print(f"✓ All plots saved to: results/")
-        print("="*50)
+        # Store for visualization
+        self.test_pred = pred
+        self.test_true = true
+        self.best_epoch_num = best_epoch
         
         return best_val, best_state, metrics
+    
+    def generate_visualizations(self, metrics):
+        """Generate visualizations (separate from training)."""
+        if not self.visualizer or self.test_pred is None:
+            return
+        print(f"\n[Scenario {self.scenario}] Generating visualizations...")
+        self.visualizer.plot_training_history(scenario=self.scenario)
+        self.visualizer.plot_predictions_vs_actual(self.test_pred, self.test_true, scenario=self.scenario)
+        self.visualizer.plot_test_metrics(metrics, scenario=self.scenario)
+        self.visualizer.plot_comparison_with_baseline(self.test_pred, self.test_true, scenario=self.scenario)
+        self.visualizer.plot_metrics_summary(metrics, epoch=self.best_epoch_num, scenario=self.scenario)
+        print(f"✓ Plots saved to results/")
 
 class Scenario1Trainer(BaseTrainer):
     """
@@ -170,10 +188,10 @@ class Scenario1Trainer(BaseTrainer):
 
     def __init__(self, seq_length=6, ff_dim=128, dropout=0.1, pred_len=3,
                  n_block=1, batch_size=4, lr=1e-4, epochs=100, patience=10,
-                 holding_cost=2, lead_time=2, ordering_cost=50_000):
+                 holding_cost=2, lead_time=2, ordering_cost=50_000, generate_plots: bool = False):
         super().__init__(seq_length, ff_dim, dropout, pred_len, n_block,
                          batch_size, lr, epochs, patience,
-                         holding_cost, lead_time, ordering_cost, scenario=1)
+                         holding_cost, lead_time, ordering_cost, scenario=1, generate_plots=generate_plots)
 
     @torch.no_grad()
     def _val_metric(self, model, loader) -> float:
@@ -192,18 +210,26 @@ class Scenario2Trainer(BaseTrainer):
 
     def __init__(self, seq_length=9, ff_dim=128, dropout=0.1, pred_len=3,
                  n_block=2, batch_size=2, lr=1e-4, epochs=1000, patience=100,
-                 holding_cost=2, lead_time=2, ordering_cost=50_000):
+                 holding_cost=2, lead_time=2, ordering_cost=50_000, generate_plots: bool = False):
         super().__init__(seq_length, ff_dim, dropout, pred_len, n_block,
                          batch_size, lr, epochs, patience,
-                         holding_cost, lead_time, ordering_cost, scenario=2)
+                         holding_cost, lead_time, ordering_cost, scenario=2, generate_plots=generate_plots)
 
     @torch.no_grad()
     def _val_metric(self, model, loader) -> float:
         model.eval()
         all_preds = []
-        for x, _ in loader:
-            all_preds.append(model(x.to(self.device)).cpu().numpy())
+        all_trues = []
+        for x, y in loader:
+            pred = model(x.to(self.device)).cpu().numpy()
+            all_preds.append(pred)
+            all_trues.append(y.numpy())
+        
         pred_np = np.clip(np.concatenate(all_preds).flatten(), 1.0, None)
+        true_np = np.concatenate(all_trues).flatten()
+        errors_np = true_np - pred_np  
+        
         tc_min, _ = sweep_tc(pred_np, self.holding_cost,
-                             self.lead_time, self.ordering_cost)
+                             self.lead_time, self.ordering_cost,
+                             forecast_errors=errors_np) 
         return tc_min
