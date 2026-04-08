@@ -2,7 +2,7 @@ from .data_loader import data_loader
 import pandas as pd
 
 class Preprocessing:
-    def __init__(self, train_ratio: float = 0.8, val_ratio: float = 0.1):
+    def __init__(self, train_ratio: float = 0.7, val_ratio: float = 0.15):
         self.train_ratio = train_ratio
         self.val_ratio = val_ratio
 

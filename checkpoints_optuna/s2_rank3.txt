@@ -1,21 +1,24 @@
 Scenario 2 — Rank 3
 =============================================
 
+── Loss Configuration ──────────────────────────
+  Val Metric  : TC
+
 ── Hyperparameters ──────────────────────────
   seq_length  : 9
   n_block     : 1
-  dropout     : 0.5
-  batch_size  : 4
-  ff_dim      : 64
-  lr          : 1e-05
+  dropout     : 0.3
+  batch_size  : 1
+  ff_dim      : 32
+  lr          : 0.0001
 
 ── Validation metric ────────────────────────
-  TC_min      : 315635.8367
+  TC_min      : 251807.7237
 
 ── Test metrics ─────────────────────────────
-  MAE         : 57157.3398
-  MSE         : 4436268544.0000
-  RMSE        : 66605.3203
-  MAPE (%)    : 16.3897
-  TC_min      : 362812.66
-  c_s*        : 1.6400
+  MAE         : 51442.5625
+  MSE         : 3486754048.0000
+  RMSE        : 59048.7422
+  MAPE (%)    : 16.1817
+  TC_min      : 394667.66
+  c_s*        : 1.5200
