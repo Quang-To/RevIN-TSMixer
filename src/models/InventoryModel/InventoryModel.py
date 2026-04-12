@@ -16,7 +16,7 @@ class InventoryModel:
         
         if forecast_errors is not None and len(forecast_errors) > 0:
             errors = np.asarray(forecast_errors).reshape(-1)
-            sigma = np.std(errors, ddof=0)
+            sigma = np.std(errors, ddof=1)
             sigma = sigma + 1e-5
         else:
             sigma = 1e-5

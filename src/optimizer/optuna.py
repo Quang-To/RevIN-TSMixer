@@ -1,18 +1,20 @@
+
 import torch
 import optuna
 from pathlib import Path
 from datetime import datetime
+import threading
 
 from src.trainers.RevINMixer import Scenario1Trainer, Scenario2Trainer
 from src.utils.seed import set_seed
 
 # OPTIMIZED search space (narrowed based on paper results)
 SEARCH_SPACE = {
-    "seq_length": [7, 8, 9],              # ← narrowed (was 1-9) | paper: 9
+    "seq_length": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],              # ← narrowed (was 1-9) | paper: 9
     "n_block"   : [1, 2, 3],              # keep all
-    "dropout"   : [0.3, 0.5, 0.7],       # ← narrowed (was 0.1-0.9) | paper: 0.5
+    "dropout"   : [0.1, 0.3, 0.5, 0.7, 0.9],       # ← narrowed (was 0.1-0.9) | paper: 0.5
     "batch_size": [1, 2, 3, 4],           # keep all
-    "ff_dim"    : [32, 64, 128],         # ← narrowed (was 8-128) | paper: 64
+    "ff_dim"    : [8, 16, 32, 64, 128],         # ← narrowed (was 8-128) | paper: 64
     "lr"        : [1e-4, 1e-5],           # keep all
 }
 # Combinations: 3×3×3×4×3×2 = 216 (was 5,400 = 0.9% coverage → now 23% with 50 trials)
@@ -39,6 +41,7 @@ class OptunaOptimizer:
         self.n_jobs         = n_jobs
         self.resume         = resume
         self.trial_results  = {}
+        self._lock = threading.Lock()
         self.db_path        = f"sqlite:///optuna_s{scenario}.db"
         self.study_name     = f"scenario_{scenario}_optimization"  
 
@@ -52,7 +55,7 @@ class OptunaOptimizer:
             lead_time=self.lead_time,        ordering_cost=self.ordering_cost,
             generate_plots=generate_plots,
             val_metric_type=self.val_metric_type,
-            seed=42,                         # ← FIXED seed (was trial_number) for reproducible results
+            seed=42,                         
             trial=trial,
         )
         return Scenario1Trainer(**shared) if self.scenario == 1 else Scenario2Trainer(**shared)
@@ -62,14 +65,13 @@ class OptunaOptimizer:
             params  = {k: trial.suggest_categorical(k, v) for k, v in SEARCH_SPACE.items()}
             trainer = self._make_trainer(params, trial_number=trial.number, trial=trial)
             best_val, best_state, metrics = trainer.train()
-            
-            # Auto-save results to avoid re-training
-            self.trial_results[trial.number] = {
-                "params": params,
-                "val_metric": best_val,
-                "model_state": best_state,
-                "metrics": metrics,
-            }
+            with self._lock:
+                self.trial_results[trial.number] = {
+                    "params": params,
+                    "val_metric": best_val,
+                    "model_state": best_state,
+                    "metrics": metrics,
+                }
             return best_val
         except optuna.exceptions.TrialPruned:
             raise  # Re-raise pruned trials
@@ -80,7 +82,6 @@ class OptunaOptimizer:
 
         print(f"\n── Scenario {self.scenario} — Top 3 ─────────────────────────────")
         for rank, trial in enumerate(top3, start=1):
-            # Load stored results instead of re-training
             result = self.trial_results.get(trial.number, {})
             best_state = result.get("model_state")
             metrics = result.get("metrics", {})
@@ -159,6 +160,11 @@ class OptunaOptimizer:
             print(f"   Completed trials: {len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])}")
             print(f"   Best value so far: {study.best_value:.4f}")
         else:
+            # Xóa study cũ nếu tồn tại
+            try:
+                optuna.delete_study(study_name=self.study_name, storage=self.db_path)
+            except KeyError:
+                pass
             # Create new study
             study = optuna.create_study(
                 direction="minimize",
@@ -166,7 +172,6 @@ class OptunaOptimizer:
                 pruner=pruner,
                 storage=self.db_path,
                 study_name=self.study_name,
-                load_if_exists=False,  # Delete if exists
             )
             print(f"\n🆕 Created study: {self.study_name}")
             print(f"   Database: {self.db_path}")
@@ -185,7 +190,7 @@ class OptunaOptimizer:
             n_jobs=self.n_jobs,  # Parallel execution
             show_progress_bar=True,
             callbacks=[self._callback],  # Runtime monitoring
-            catch=(Exception,),  # Don't stop on exceptions
+            catch=(RuntimeError, ValueError),  # Chỉ bắt lỗi thông thường
         )
 
         print(f"\n{'='*60}")

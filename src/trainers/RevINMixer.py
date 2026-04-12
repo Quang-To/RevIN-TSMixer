@@ -54,6 +54,9 @@ def collect_predictions(model, loader, device):
     for x, y in loader:
         preds.append(model(x.to(device)).cpu().numpy())
         trues.append(y.numpy())
+    if len(preds) == 0 or len(trues) == 0:
+        # Không có batch nào trong loader
+        return np.array([]), np.array([]), np.array([])
     pred_array = np.concatenate(preds).flatten()
     true_array = np.concatenate(trues).flatten()
     errors = true_array - pred_array
@@ -104,14 +107,14 @@ class BaseTrainer:
     def _compute_results(self, pred, true):
         """Evaluate trên test set, dùng test errors để tính TC."""
         metrics = compute_metrics(pred, true)
-        test_errors = true - pred
+        # SỬA: Dùng train_errors để tính safety stock, tránh leakage
         tc_min, cs_star = sweep_tc(
             pred,
-            forecast_errors=test_errors,
+            forecast_errors=self.train_errors if self.train_errors is not None else np.zeros_like(pred),
             holding_cost=self.holding_cost,
             lead_time=self.lead_time,
             ordering_cost=self.ordering_cost,
-            n_steps=1000,  # fine search cho final evaluation
+            n_steps=1000,
         )
         metrics.update({"TC_min": tc_min, "c_s_star": cs_star})
         return metrics
@@ -124,9 +127,6 @@ class BaseTrainer:
 
         model = self._build_model()
         optimizer = Adam(model.parameters(), lr=self.lr)
-
-        _, train_true, train_errors = collect_predictions(model, train_loader, self.device)
-        self.train_errors = train_errors
 
         best_val, best_state, no_improve, best_epoch = float("inf"), None, 0, 0
 
@@ -141,12 +141,10 @@ class BaseTrainer:
                 if torch.isnan(loss) or torch.isinf(loss):
                     continue
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
                 optimizer.step()
                 train_loss += loss.item()
             train_loss /= max(len(train_loader), 1)
-
-            _, _, self.train_errors = collect_predictions(model, train_loader, self.device)
 
             # ---- Validate ----
             val_metric = self._val_metric(model, val_loader)
@@ -154,7 +152,7 @@ class BaseTrainer:
             if self.visualizer:
                 self.visualizer.log_epoch(epoch, train_loss, val_metric)
 
-            if epoch % 10 == 0 or epoch == 1:
+            if epoch % 50 == 0 or epoch == 1:
                 print(f"Epoch {epoch:>4} | train={train_loss:>7.4f} | val={val_metric:>9.2f}")
 
             # ---- Optuna Pruning Report ----
@@ -239,11 +237,13 @@ class Scenario2Trainer(BaseTrainer):
         for x, y in loader:
             all_preds.append(model(x.to(self.device)).cpu().numpy())
             all_trues.append(y.numpy())
+        if len(all_preds) == 0:
+            return float("inf")
         pred_np = np.clip(np.concatenate(all_preds).flatten(), 1.0, None)
         true_np = np.concatenate(all_trues).flatten()
 
         if self.val_metric_type == "tc":
-            errors = true_np - pred_np
+            errors = true_np - pred_np  
             tc_min, _ = sweep_tc(
                 pred_np,
                 forecast_errors=errors,
