@@ -3,13 +3,13 @@ from src.trainers.RevINMixer import Scenario1Trainer, Scenario2Trainer
 SCENARIO = 2
 VAL_METRIC = "tc"      
 
-SEQ_LENGTH = 12
+SEQ_LENGTH = 9
 PRED_LEN = 3
-N_BLOCK = 1
+N_BLOCK = 2
 FF_DIM = 128
 DROPOUT = 0.1
 
-BATCH_SIZE = 4
+BATCH_SIZE = 2
 LR = 1e-4
 EPOCHS = 2000
 PATIENCE = 100
