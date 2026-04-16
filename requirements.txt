@@ -7,6 +7,6 @@ scikit-learn
 xgboost
 matplotlib
 seaborn
-jupyter>
+jupyter
 notebook
 ipykernel
