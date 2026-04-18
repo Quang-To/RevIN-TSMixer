@@ -3,7 +3,7 @@ from src.data.preprocessing import Preprocessing
 
 class WalkForwardSplitter:
     def __init__(self, seq_length: int, pred_length: int, forecast_horizon: int = 4,
-                 train_ratio: float = 0.45, val_size: int = 23, test_size: int = 29, step: int = 3):
+                 train_ratio: float = 0.45, val_size: int = 29, test_size: int = 29, step: int = 3):
         self.seq_length = seq_length
         self.pred_length = pred_length
         self.forecast_horizon = forecast_horizon

@@ -4,9 +4,9 @@ if __name__ == "__main__":
     seq_length = 12
     pred_length = 3
     forecast_horizon = 4
-    train_ratio = 0.5
-    val_size = 20
-    test_size = 27
+    train_ratio = 0.6
+    val_size = 21
+    test_size = 21
     step = 3
 
     splitter = WalkForwardSplitter(

@@ -20,14 +20,14 @@ VAL_METRIC = "tc"          # "mape" for Scenario 1, "tc" for Scenario 2
 SEED       = 42
 
 # Model
-SEQ_LENGTH = 9
+SEQ_LENGTH = 12
 PRED_LEN   = 3
-N_BLOCK    = 2
-FF_DIM     = 128
+N_BLOCK    = 3
+FF_DIM     = 64
 DROPOUT    = 0.1
 
 # Training
-BATCH_SIZE = 2
+BATCH_SIZE = 4
 LR         = 1e-4
 EPOCHS     = 2000
 PATIENCE   = 100
@@ -68,9 +68,9 @@ if __name__ == "__main__":
       seq_length=SEQ_LENGTH,
       pred_length=PRED_LEN,
       forecast_horizon=FORECAST_HORIZON,
-      train_ratio=0.5,
-      val_size=20,
-      test_size=29,
+      train_ratio=0.6,
+      val_size=21,
+      test_size=21,
       step=3,
     )
     run_result = trainer.train_and_test_with_best_hparams(walk_params, batch_size=BATCH_SIZE, verbose=True)

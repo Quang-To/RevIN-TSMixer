@@ -1,14 +1,3 @@
-"""
-optuna_search.py — Hyperparameter optimisation with Optuna.
-
-Run directly:
-    python optuna_search.py
-
-NOTE: Khi dùng n_jobs > 1, SQLite có thể bị lỗi "database is locked" do
-concurrent writes. Nếu gặp vấn đề, chuyển sang PostgreSQL:
-    db_path = "postgresql://user:password@localhost/optuna_db"
-"""
-
 import threading
 from pathlib import Path
 
@@ -148,14 +137,13 @@ class OptunaOptimizer:
         params  = {k: trial.suggest_categorical(k, v) for k, v in SEARCH_SPACE.items()}
         trainer = self._make_trainer(params, trial=trial)
 
-        # Luôn dùng forecast_horizon=4 cho toàn bộ pipeline
         walk_params = dict(
             seq_length       = params["seq_length"],
             pred_length      = self.pred_len,
             forecast_horizon = 4,
-            train_ratio      = 0.5,
-            val_size         = 20,
-            test_size        = 29,
+            train_ratio      = 0.6,
+            val_size         = 21,
+            test_size        = 21,
             step             = 3,
         )
 
@@ -320,6 +308,6 @@ if __name__ == "__main__":
         scenario=2,
         n_trials=100,
         val_metric_type="tc",
-        n_jobs=2,
-        resume=False,
+        n_jobs=4,
+        resume=True,
     ).run()

@@ -17,7 +17,6 @@ class BaseTrainer(ABC):
     Handles the full walk-forward training loop.
     """
 
-    # ── FIX 1: __init__ được đưa lên đầu class ───────────────────────────────
     def __init__(
         self,
         seq_length: int,
@@ -77,68 +76,57 @@ class BaseTrainer(ABC):
         bsz = batch_size or self.batch_size
         splitter = WalkForwardSplitter(**walk_params)
         fold_losses = []
+        fold_best_epochs = []
+
 
         for fold_idx, split in enumerate(splitter.get_splits()):
-            # Không overlap: val_loader bắt đầu ngay sau train_loader
             train_loader = self._make_loader(0, split["train_end"], bsz, forecast_horizon=4)
             val_loader   = self._make_loader(split["train_end"], split["val_end"], bsz, forecast_horizon=4)
             set_seed(self.seed)
             model     = self._build_model()
             optimizer = Adam(model.parameters(), lr=self.lr)
-            best_val, no_improve = float("inf"), 0
-            val_history: list[float] = []
+            best_val, best_epoch, no_improve = float("inf"), 1, 0
 
             for epoch in range(1, self.epochs + 1):
                 train_loss = self._train_epoch(model, optimizer, train_loader)
                 val_metric = self._val_metric(model, val_loader)
-                val_history.append(val_metric)
 
                 if epoch % 50 == 0 or epoch == 1 or epoch == self.epochs:
                     print(f"    [Fold {fold_idx}] Epoch {epoch:>3} | train={train_loss:.4f} | val={val_metric:.4f}")
 
-                if epoch >= min_epochs:
-                    # Prune nếu relative_slope > 0.01
-                    if len(val_history) >= trend_window:
-                        window = val_history[-trend_window:]
-                        slope  = float(np.polyfit(range(trend_window), window, 1)[0])
-                        mean_window = np.mean(window)
-                        relative_slope = slope / (abs(mean_window) + 1e-8)
-                        if relative_slope > 0.01:
-                            if verbose:
-                                print(
-                                    f"    [Fold {fold_idx}] Epoch {epoch:>3} | "
-                                    f"Rising trend detected (relative_slope={relative_slope:.4f}) → prune"
-                                )
-                            raise _optuna.exceptions.TrialPruned()
+                if val_metric < best_val:
+                    best_val   = val_metric
+                    best_epoch = epoch
+                    no_improve = 0
+                else:
+                    no_improve += 1
 
-                    # Early stopping: không overlap, chỉ tính sau warmup
-                    if val_metric < best_val:
-                        best_val   = val_metric
-                        no_improve = 0
-                    else:
-                        no_improve += 1
-                        if no_improve >= self.patience:
-                            break
+                if epoch >= min_epochs and val_metric > best_val * 1.5:
+                    if verbose:
+                        print(f"    [Fold {fold_idx}] Diverging → prune")
+                    raise _optuna.exceptions.TrialPruned()
 
-                # Chỉ gọi report/should_prune nếu trial là optuna.Trial
-                import optuna as _optuna
+                if no_improve >= self.patience:
+                    if verbose:
+                        print(f"    [Fold {fold_idx}] Early stop epoch {epoch}, best_epoch={best_epoch}")
+                    break
+
                 if self.trial is not None and isinstance(self.trial, _optuna.trial.Trial):
                     global_step = fold_idx * self.epochs + epoch
                     self.trial.report(val_metric, step=global_step)
                     if self.trial.should_prune():
                         raise _optuna.exceptions.TrialPruned()
 
-            if len(val_history) >= tail_window:
-                fold_loss = float(np.mean(val_history[-tail_window:]))
-            elif val_history:
-                fold_loss = float(np.mean(val_history))
-            else:
-                fold_loss = float("inf")
+            fold_losses.append(best_val if best_val < float("inf") else float("inf"))
+            fold_best_epochs.append(best_epoch)
 
             if verbose:
-                print(f"    [Fold {fold_idx}] fold_loss (tail mean) = {fold_loss:.4f}")
+                print(f"    [Fold {fold_idx}] best_val={best_val:.4f} | best_epoch={best_epoch}")
 
-            fold_losses.append(fold_loss)
+        # Lưu vào instance để lấy sau khi Optuna chọn best trial
+        self._cv_fold_losses    = fold_losses
+        self._cv_best_epochs    = fold_best_epochs
+        self._cv_avg_best_epoch = int(round(np.mean(fold_best_epochs))) if fold_best_epochs else self.epochs
 
         mean_loss = float(np.mean(fold_losses)) if fold_losses else float("inf")
         return mean_loss
@@ -147,61 +135,51 @@ class BaseTrainer(ABC):
         self,
         walk_params: dict,
         batch_size: Optional[int] = None,
+        best_epoch: Optional[int] = None,
         verbose: bool = True,
     ) -> dict:
         """
-        Dùng sau khi chọn best hyperparams: train trên toàn bộ train+val, test trên test window.
+        Sau khi Optuna đã chọn best hyperparams và avg_best_epoch:
+          - Train toàn bộ dữ liệu trước test window ([0, train_end]) đúng best_epoch bước
+          - Đánh giá đúng 1 lần trên final test window
+          - Không dùng test để chọn bất kỳ tham số nào
         """
         bsz = batch_size or self.batch_size
         splitter = WalkForwardSplitter(**walk_params)
         final = splitter.get_final_test()
         forecast_horizon = walk_params.get("forecast_horizon", 4)
-        train_loader = self._make_loader(0, final["train_end"], bsz, forecast_horizon)
-        test_loader  = self._make_loader(final["test_start"], final["test_end"], bsz, forecast_horizon)
-        val_loader = self._make_loader(
-            int(final["train_end"] * 0.8),
-            final["train_end"],
-            bsz,
-            forecast_horizon
-        )
+
+        full_train_loader = self._make_loader(0, final["train_end"], bsz, forecast_horizon)
+        test_loader       = self._make_loader(final["test_start"], final["test_end"], bsz, forecast_horizon)
+
+        n_epochs = best_epoch if best_epoch is not None else self.epochs
+        if verbose:
+            print(f"  [Train] Toàn bộ dữ liệu trước test: [0:{final['train_end']}] ({n_epochs} epochs)...")
 
         set_seed(self.seed)
-        model = self._build_model()
+        model     = self._build_model()
         optimizer = Adam(model.parameters(), lr=self.lr)
-        best_val, best_state, no_improve, best_epoch = float("inf"), None, 0, 0
 
-        for epoch in range(1, self.epochs + 1):
-            train_loss = self._train_epoch(model, optimizer, train_loader)
-            val_metric = self._val_metric(model, val_loader)  # val_loader thực sự
+        for epoch in range(1, n_epochs + 1):
+            train_loss = self._train_epoch(model, optimizer, full_train_loader)
             if self.visualizer is not None:
-                self.visualizer.log_epoch(epoch, train_loss, val_metric)
-            if val_metric < best_val:
-                best_val = val_metric
-                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-                best_epoch = epoch
-                no_improve = 0
-            else:
-                no_improve += 1
-                if no_improve >= self.patience:
-                    break
+                self.visualizer.log_epoch(epoch, train_loss, None)
+            if verbose:
+                print(f"  [Train] Epoch {epoch:>3} | train={train_loss:.4f}")
 
-        if best_state is not None:
-            model.load_state_dict(best_state)
-
-        _, _, self.train_errors, _ = collect_predictions(model, train_loader, self.device)
+        _, _, self.train_errors, _ = collect_predictions(model, full_train_loader, self.device)
         test_pred, test_true, _, test_indices = collect_predictions(model, test_loader, self.device)
         test_metrics = self._compute_results(test_pred, test_true)
 
         if verbose:
-            print(f"[Best hparams] Test TC_min={test_metrics['TC_min']:.4f} | MAPE={test_metrics['MAPE']:.4f}%")
+            print(f"\n[Result] Epochs={n_epochs} | Test TC_min={test_metrics['TC_min']:.4f} | MAPE={test_metrics['MAPE']:.4f}%")
 
         return {
             "metrics":      test_metrics,
             "test_pred":    test_pred,
             "test_true":    test_true,
             "test_indices": test_indices,
-            "best_val":     best_val,
-            "best_epoch":   best_epoch,
+            "best_epoch":   n_epochs,
         }
 
     def train_walk_forward(
@@ -210,17 +188,14 @@ class BaseTrainer(ABC):
         batch_size: Optional[int] = None,
         verbose: int = 1,
     ) -> dict:
-        # Luôn dùng forecast_horizon=4
         walk_params = dict(walk_params)
         walk_params["forecast_horizon"] = 4
         bsz = batch_size or self.batch_size
         splitter = WalkForwardSplitter(**walk_params)
 
         val_folds: list[dict] = []
-        best_global_val   = float("inf")
-        best_global_state = None
+        best_global_val = float("inf")
 
-        # Phase 1: Validation folds
         for split in splitter.get_splits():
             if verbose >= 1:
                 print(f"\n[Fold {split['fold']}] train_end={split['train_end']} | val_end={split['val_end']}")
@@ -232,7 +207,7 @@ class BaseTrainer(ABC):
             model     = self._build_model()
             optimizer = Adam(model.parameters(), lr=self.lr)
 
-            best_val, best_state, no_improve, best_epoch = float("inf"), None, 0, 0
+            best_val, best_epoch, no_improve = float("inf"), 1, 0
 
             for epoch in range(1, self.epochs + 1):
                 train_loss = self._train_epoch(model, optimizer, train_loader)
@@ -243,18 +218,12 @@ class BaseTrainer(ABC):
 
                 if val_metric < best_val:
                     best_val   = val_metric
-                    best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
                     best_epoch = epoch
                     no_improve = 0
                 else:
                     no_improve += 1
                     if no_improve >= self.patience:
                         break
-
-            if best_state is not None:
-                model.load_state_dict(best_state)
-
-            _, _, self.train_errors, _ = collect_predictions(model, train_loader, self.device)
 
             val_folds.append({
                 "fold":       split["fold"],
@@ -264,42 +233,33 @@ class BaseTrainer(ABC):
             })
 
             if best_val < best_global_val:
-                best_global_val   = best_val
-                best_global_state = best_state
+                best_global_val = best_val
 
             if verbose >= 1:
                 print(f"  → Best val: {best_val:.4f} (epoch {best_epoch})")
 
-        # CV summary
+        # CV summary + tính avg_best_epoch từ các fold
+        avg_best_epoch = int(round(np.mean([f["best_epoch"] for f in val_folds]))) if val_folds else self.epochs
         if verbose >= 1 and val_folds:
             mean_val = np.mean([f["best_val"] for f in val_folds])
-            print(f"\n[CV Summary] mean val = {mean_val:.4f}")
+            print(f"\n[CV Summary] mean val={mean_val:.4f} | avg_best_epoch={avg_best_epoch}")
 
-        # Phase 2: Final test (retrain trên toàn bộ train+val)
-        final = splitter.get_final_test()
+        # ── Phase 2: retrain trên toàn bộ train+val đúng avg_best_epoch bước ─
+        final        = splitter.get_final_test()
         train_loader = self._make_loader(0, final["train_end"], bsz, forecast_horizon=4)
         test_loader  = self._make_loader(final["test_start"], final["test_end"], bsz, forecast_horizon=4)
 
-        set_seed(self.seed)
-        model = self._build_model()
-        # Luôn retrain trên toàn bộ train+val, không dùng best_global_state
-        optimizer = Adam(model.parameters(), lr=self.lr)
-        best_val, best_state, no_improve, best_epoch = float("inf"), None, 0, 0
-        for epoch in range(1, self.epochs + 1):
-            train_loss = self._train_epoch(model, optimizer, train_loader)
-            val_metric = train_loss  # Không có val_loader, chỉ train trên toàn bộ
-            if val_metric < best_val:
-                best_val = val_metric
-                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-                best_epoch = epoch
-                no_improve = 0
-            else:
-                no_improve += 1
-                if no_improve >= self.patience:
-                    break
-        if best_state is not None:
-            model.load_state_dict(best_state)
+        if verbose >= 1:
+            print(f"\n[Phase2] Retrain toàn bộ dữ liệu trước test ({avg_best_epoch} epochs)...")
 
+        set_seed(self.seed)
+        model     = self._build_model()
+        optimizer = Adam(model.parameters(), lr=self.lr)
+
+        for epoch in range(1, avg_best_epoch + 1):
+            self._train_epoch(model, optimizer, train_loader)
+
+        # Collect train_errors từ đúng model cuối, sau đó đánh giá test 1 lần
         _, _, self.train_errors, _ = collect_predictions(model, train_loader, self.device)
         test_pred, test_true, _, test_indices = collect_predictions(model, test_loader, self.device)
         test_metrics = self._compute_results(test_pred, test_true)
@@ -315,6 +275,7 @@ class BaseTrainer(ABC):
                 "test_true":    test_true,
                 "test_indices": test_indices,
                 "best_val":     best_global_val,
+                "best_epoch":   avg_best_epoch,
             },
         }
 
