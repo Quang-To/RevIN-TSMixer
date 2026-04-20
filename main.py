@@ -8,9 +8,10 @@ This file only contains:
   4. Results aggregation + printing + visualisation
 """
 
+
+import torch
 from src.trainers.RevINMixer import Scenario1Trainer, Scenario2Trainer
-from src.data.walk_forward import WalkForwardSplitter
-from src.utils.evaluation import unpack_results, print_summary
+from src.utils.evaluation import print_summary
 from src.utils.visualization import TrainingVisualizer
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -40,49 +41,64 @@ FORECAST_HORIZON = 4
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
+
 if __name__ == "__main__":
-    print(f"\n{'='*30} SEED: {SEED} {'='*30}")
+    print(f"\n{'='*30} FINAL TEST {'='*30}")
+
+    checkpoint = torch.load(f"checkpoints_optuna/s{SCENARIO}_rank1.pt")
+    best_params = checkpoint["params"].copy()
+    best_epoch = checkpoint.get("best_epoch", None)
+    fold_best_epochs = checkpoint.get("fold_best_epochs", [])
+    val_metric = checkpoint.get("val_metric", None)
+    rank = checkpoint.get("rank", None)
+    scenario_ckpt = checkpoint.get("scenario", None)
+    for k in ["val_metric", "val_metric_type"]:
+        if k in best_params:
+            best_params.pop(k)
+
+    print(f"Loaded checkpoint: rank={rank}, scenario={scenario_ckpt}, val_metric={val_metric}, best_epoch={best_epoch}, fold_best_epochs={fold_best_epochs}")
 
     TrainerClass = Scenario1Trainer if SCENARIO == 1 else Scenario2Trainer
-
     visualizer = TrainingVisualizer(save_dir="results")
     trainer = TrainerClass(
-      seq_length=SEQ_LENGTH,
-      ff_dim=FF_DIM,
-      dropout=DROPOUT,
-      pred_len=PRED_LEN,
-      n_block=N_BLOCK,
-      batch_size=BATCH_SIZE,
-      lr=LR,
-      epochs=EPOCHS,
-      patience=PATIENCE,
-      holding_cost=HOLDING_COST,
-      ordering_cost=ORDERING_COST,
-      val_metric_type=VAL_METRIC,
-      seed=SEED,
-      visualizer=visualizer,
+        **best_params,
+        pred_len=PRED_LEN,
+        epochs=EPOCHS,         
+        patience=PATIENCE,     
+        holding_cost=HOLDING_COST,
+        ordering_cost=ORDERING_COST,
+        seed=SEED,
+        visualizer=visualizer,
     )
 
-    # Đúng chuẩn: train trên toàn bộ train+val, test trên test window cuối cùng
     walk_params = dict(
-      seq_length=SEQ_LENGTH,
-      pred_length=PRED_LEN,
-      forecast_horizon=FORECAST_HORIZON,
-      train_ratio=0.6,
-      val_size=21,
-      test_size=21,
-      step=3,
+        seq_length=best_params["seq_length"],
+        pred_length=PRED_LEN,
+        forecast_horizon=FORECAST_HORIZON,
+        train_ratio=0.6,
+        val_size=21,
+        test_size=21,
+        step=3,
     )
-    run_result = trainer.train_and_test_with_best_hparams(walk_params, batch_size=BATCH_SIZE, verbose=True)
+    run_result = trainer.train_and_test_with_best_hparams(
+        walk_params,
+        batch_size=best_params["batch_size"],
+        best_epoch=best_epoch,  
+        verbose=True
+    )
     result = {
-      "preds": run_result["test_pred"],
-      "trues": run_result["test_true"],
-      "indices": run_result.get("test_indices", []),
-      "metrics": run_result["metrics"],
+        "preds": run_result["test_pred"],
+        "trues": run_result["test_true"],
+        "indices": run_result.get("test_indices", []),
+        "metrics": run_result["metrics"],
+        "best_epoch": run_result.get("best_epoch", None),
+        "fold_best_epochs": fold_best_epochs,
+        "val_metric": val_metric,
+        "rank": rank,
+        "scenario": scenario_ckpt,
     }
 
     print_summary(result, scenario=SCENARIO, seed=SEED)
-
     visualizer.plot_training_history(scenario=SCENARIO)
     visualizer.plot_predictions_vs_actual(result["preds"], result["trues"], scenario=SCENARIO)
     visualizer.plot_test_metrics(result["metrics"], scenario=SCENARIO)
