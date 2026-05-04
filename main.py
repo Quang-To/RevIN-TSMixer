@@ -21,7 +21,7 @@ FF_DIM     = 64
 # NBEATS specific
 N_STACKS   = 3
 N_LAYERS   = 2
-LAYER_DIM  = 128
+LAYER_DIM  = 256
 
 # Common
 DROPOUT    = 0.1
