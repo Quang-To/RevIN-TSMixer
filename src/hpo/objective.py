@@ -1,9 +1,16 @@
-from src.hpo.config import DEFAULT_WALK_PARAMS, SEARCH_SPACE
+from src.hpo.config import DEFAULT_WALK_PARAMS, SEARCH_SPACE_TSMIXER, SEARCH_SPACE_NBEATS
 from src.hpo.trainer_factory import make_trainer
 
-def sample_params(trial):
+def sample_params(trial, model_type="tsmixer"):
     """Sample hyperparameters from Optuna trial."""
-    return {k: trial.suggest_categorical(k, v) for k, v in SEARCH_SPACE.items()}
+    if model_type == "tsmixer":
+        search_space = SEARCH_SPACE_TSMIXER
+    elif model_type == "nbeats":
+        search_space = SEARCH_SPACE_NBEATS
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}")
+    
+    return {k: trial.suggest_categorical(k, v) for k, v in search_space.items()}
 
 def build_walk_params(params, pred_length):
     """Build walk-forward parameters for training."""

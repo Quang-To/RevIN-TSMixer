@@ -4,7 +4,7 @@ import optuna
 import torch
 import logging
 from src.utils.seed import set_seed
-from src.hpo.config import VALID_METRICS, DEFAULT_N_STARTUP_TRIALS, DEFAULT_N_EI_CANDIDATES, SUMMARY_EVERY_N
+from src.hpo.config import VALID_METRICS, VALID_MODELS, DEFAULT_N_STARTUP_TRIALS, DEFAULT_N_EI_CANDIDATES, SUMMARY_EVERY_N
 from src.hpo.trainer_factory import make_trainer
 from src.hpo.objective import sample_params, build_walk_params, evaluate, config_dict_from_obj
 
@@ -28,9 +28,12 @@ class OptunaOptimizer:
         n_jobs: int = 1,
         resume: bool = False,
         seed: int = 42,
+        model_type: str = "tsmixer",
     ):
         assert scenario in (1, 2), "scenario must be 1 or 2"
+        assert model_type in VALID_MODELS, f"model_type must be one of {VALID_MODELS}, got '{model_type}'"
         self.scenario        = scenario
+        self.model_type      = model_type
         self.n_trials        = n_trials
         self.save_dir        = Path(save_dir)
         self.pred_len        = pred_len
@@ -49,8 +52,8 @@ class OptunaOptimizer:
 
         self.trial_results: dict = {}
         self._lock      = threading.Lock()
-        self.db_path    = f"sqlite:///optuna_s{scenario}.db"
-        self.study_name = f"scenario_{scenario}_optimization"
+        self.db_path    = f"sqlite:///optuna_s{scenario}_{model_type}.db"
+        self.study_name = f"scenario_{scenario}_{model_type}_optimization"
 
     def _log_trial(self, trial, params, loss):
         print(f"Trial {trial.number} | val_metric = {loss:.4f} | params = {params}")
@@ -59,8 +62,8 @@ class OptunaOptimizer:
         return config_dict_from_obj(self)
 
     def _objective(self, trial):
-        params = sample_params(trial)
-        trainer = make_trainer(self.scenario, params, self._config_dict(), seed=self.seed, trial=trial)
+        params = sample_params(trial, model_type=self.model_type)
+        trainer = make_trainer(self.scenario, params, self._config_dict(), seed=self.seed, trial=trial, model_type=self.model_type)
         walk_params = build_walk_params(params, self.pred_len)
         loss, metrics = evaluate(trainer, walk_params, params)
 
@@ -78,7 +81,7 @@ class OptunaOptimizer:
             key=lambda t: t.value if t.value is not None else float("inf"),
         )[:3]
 
-        print(f"\n── Scenario {self.scenario} — Top 3 ─────────────────────────────")
+        print(f"\n── Scenario {self.scenario} — Model {self.model_type.upper()} — Top 3 ──────────────────────────")
         for rank, trial in enumerate(top3, start=1):
             result  = self.trial_results.get(trial.number, {})
             metrics = result.get("metrics", {})
@@ -87,19 +90,21 @@ class OptunaOptimizer:
                 {
                     "rank":       rank,
                     "scenario":   self.scenario,
+                    "model_type": self.model_type,
                     "val_metric": trial.value,
                     "params":     trial.params,
                 },
-                self.save_dir / f"s{self.scenario}_rank{rank}.pt",
+                self.save_dir / f"s{self.scenario}_{self.model_type}_rank{rank}.pt",
             )
 
             val_label = "MAPE (%)" if self.val_metric == "mape" else "TC_min"
             lines = [
-                f"Scenario {self.scenario} — Rank {rank}",
-                "=" * 45,
+                f"Scenario {self.scenario} — Model {self.model_type.upper()} — Rank {rank}",
+                "=" * 50,
                 "",
                 "── Loss Configuration ──────────────────────────",
                 f"  {'Val Metric':<12}: {self.val_metric.upper()}",
+                f"  {'Model':<12}: {self.model_type.upper()}",
                 "",
                 "── Hyperparameters ─────────────────────────────",
                 *[f"  {k:<12}: {v}" for k, v in trial.params.items()],
@@ -113,10 +118,10 @@ class OptunaOptimizer:
                 f"  {'fold min':<12}: {metrics.get('min', 0):.4f}",
                 f"  {'fold max':<12}: {metrics.get('max', 0):.4f}",
             ]
-            (self.save_dir / f"s{self.scenario}_rank{rank}.txt").write_text(
+            (self.save_dir / f"s{self.scenario}_{self.model_type}_rank{rank}.txt").write_text(
                 "\n".join(lines), encoding="utf-8"
             )
-            print(f"  Rank {rank} | val={trial.value:.4f} | saved → s{self.scenario}_rank{rank}.pt / .txt")
+            print(f"  Rank {rank} | val={trial.value:.4f} | saved → s{self.scenario}_{self.model_type}_rank{rank}.pt / .txt")
 
     # ── Callback ──────────────────────────────────────────────────────────────
 
@@ -177,6 +182,7 @@ class OptunaOptimizer:
 
         logger.info(f"\n⚙️  Configuration:")
         logger.info(f"   Scenario      : {self.scenario}")
+        logger.info(f"   Model         : {self.model_type.upper()}")
         logger.info(f"   Metric        : {self.val_metric.upper()}")
         logger.info(f"   Trials        : {self.n_trials}")
         logger.info(f"   Parallel jobs : {self.n_jobs}")
@@ -214,4 +220,5 @@ if __name__ == "__main__":
         val_metric="tc",
         n_jobs=4,
         resume=True,
+        model_type = 'nbeats'
     ).run()

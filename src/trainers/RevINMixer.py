@@ -8,6 +8,7 @@ import optuna as _optuna
 from src.utils.seed import set_seed
 from src.utils.metrics import mape_loss, compute_metrics, sweep_tc, collect_predictions
 from src.models.ForecastModel.ForecastModel import ForecastModel
+from src.models.NBEATSModel.NBEATSModel import NBEATSModel
 from src.data.dataset import TimeSeriesData
 from src.data.walk_forward import WalkForwardSplitter
 
@@ -32,10 +33,6 @@ class BaseTrainer(ABC):
     def __init__(
         self,
         seq_length: int,
-        ff_dim: int,
-        dropout: float,
-        pred_len: int,
-        n_block: int,
         batch_size: int,
         lr: float,
         epochs: int,
@@ -43,17 +40,23 @@ class BaseTrainer(ABC):
         holding_cost: float,
         lead_time: int,
         ordering_cost: float,
+        pred_len: int,
         scenario: int = 1,
         val_metric_type: str = "mape",
         seed: int = 42,
         trial: Optional[object] = None,
         visualizer=None,
+        model_type: str = "tsmixer",
+        # TSMixer parameters
+        ff_dim: Optional[int] = None,
+        n_block: Optional[int] = None,
+        dropout: Optional[float] = None,
+        # NBEATS parameters
+        n_stacks: Optional[int] = None,
+        n_layers: Optional[int] = None,
+        layer_dim: Optional[int] = None,
     ):
         self.seq_length = seq_length
-        self.ff_dim = ff_dim
-        self.dropout = dropout
-        self.pred_len = pred_len
-        self.n_block = n_block
         self.batch_size = batch_size
         self.lr = lr
         self.epochs = epochs
@@ -61,12 +64,24 @@ class BaseTrainer(ABC):
         self.holding_cost = holding_cost
         self.lead_time = lead_time
         self.ordering_cost = ordering_cost
+        self.pred_len = pred_len
         self.scenario = scenario
         self.val_metric_type = val_metric_type
         self.seed = int(seed)
         self.trial = trial
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.visualizer = visualizer
+        self.model_type = model_type
+
+        # TSMixer parameters
+        self.ff_dim = ff_dim or 64
+        self.n_block = n_block or 1
+        self.dropout = dropout or 0.1
+
+        # NBEATS parameters
+        self.n_stacks = n_stacks or 3
+        self.n_layers = n_layers or 4
+        self.layer_dim = layer_dim or 128
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -96,7 +111,7 @@ class BaseTrainer(ABC):
         fold_losses = []
 
         orig_epochs, orig_patience = self.epochs, self.patience
-        self.epochs  = self.OPTUNA_EPOCHS
+        self.epochs   = self.OPTUNA_EPOCHS
         self.patience = self.OPTUNA_PATIENCE
 
         try:
@@ -119,16 +134,15 @@ class BaseTrainer(ABC):
                 if verbose:
                     print(f"    [Fold {fold_idx}] best_val={best_val:.4f}")
         finally:
-            # Always restore original values
-            self.epochs  = orig_epochs
+            self.epochs   = orig_epochs
             self.patience = orig_patience
 
         mean_loss = float(np.mean(fold_losses)) if fold_losses else float("inf")
         metrics = {
-            "mean": mean_loss,
-            "std":  float(np.std(fold_losses))  if fold_losses else 0.0,
-            "min":  float(np.min(fold_losses))  if fold_losses else float("inf"),
-            "max":  float(np.max(fold_losses))  if fold_losses else float("inf"),
+            "mean":       mean_loss,
+            "std":        float(np.std(fold_losses))  if fold_losses else 0.0,
+            "min":        float(np.min(fold_losses))  if fold_losses else float("inf"),
+            "max":        float(np.max(fold_losses))  if fold_losses else float("inf"),
             "fold_losses": fold_losses,
         }
         return mean_loss, metrics
@@ -139,12 +153,13 @@ class BaseTrainer(ABC):
         batch_size: Optional[int] = None,
         verbose: bool = True,
         n_epochs: int = 3000,
-        patience: int = 100
+        patience: int = 100,
     ) -> dict:
         """
         Final training run after Optuna selects best hyperparameters.
-        Trains on all data before the test window, with early stopping (patience=self.patience),
-        then evaluates once on the held-out test window.
+        Trains on ALL data before the test window (train + val combined),
+        using early stopping monitored on train loss (no separate val set).
+        Evaluates once on the held-out test window.
         """
         bsz              = batch_size or self.batch_size
         forecast_horizon = walk_params.get("forecast_horizon", DEFAULT_FORECAST_HORIZON)
@@ -161,40 +176,39 @@ class BaseTrainer(ABC):
         model     = self._build_model()
         optimizer = Adam(model.parameters(), lr=self.lr)
 
-        best_val = float("inf")
-        best_epoch_idx = 1
-        no_improve = 0
+        best_loss       = float("inf")
+        best_epoch_idx  = 1
+        no_improve      = 0
         best_state_dict = None
 
         for epoch in range(1, n_epochs + 1):
             train_loss = self._train_epoch(model, optimizer, train_loader)
-            # Use training set as validation if no separate val set
-            val_loss = self._val_metric(model, train_loader) if hasattr(self, '_val_metric') else train_loss
-            if val_loss < best_val:
-                best_val = val_loss
-                best_epoch_idx = epoch
-                no_improve = 0
+
+            if train_loss < best_loss:
+                best_loss       = train_loss
+                best_epoch_idx  = epoch
+                no_improve      = 0
                 best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             else:
                 no_improve += 1
 
             if self.visualizer is not None:
                 self.visualizer.log_epoch(epoch, train_loss, None)
-            if verbose and (epoch == 1 or epoch % 50 == 0 or epoch == n_epochs or no_improve == patience):
-                print(f"  [Train][NoFold] Epoch {epoch:>3}/{n_epochs} | train={train_loss:.4f} | val={val_loss:.4f}")
+
+            if verbose and (epoch == 1 or epoch % 50 == 0 or epoch == n_epochs):
+                print(f"  [Train] Epoch {epoch:>4}/{n_epochs} | train={train_loss:.4f} | best={best_loss:.4f}")
 
             if no_improve >= patience:
                 if verbose:
-                    print(f"  [Train][NoFold] Early stop at epoch {epoch}, best_epoch={best_epoch_idx}")
+                    print(f"  [Train] Early stop at epoch {epoch}, best_epoch={best_epoch_idx}")
                 break
 
-        # Restore best weights
         if best_state_dict is not None:
             model.load_state_dict(best_state_dict)
 
-        train_errors                    = self._collect_train_errors(model, train_loader)
+        train_errors                       = self._collect_train_errors(model, train_loader)
         test_pred, test_true, test_indices = self._run_inference(model, test_loader)
-        test_metrics                    = self._compute_results(test_pred, test_true, train_errors)
+        test_metrics                       = self._compute_results(test_pred, test_true, train_errors)
 
         if verbose:
             print(f"\n[Result] Epochs={best_epoch_idx} | TC_min={test_metrics['TC_min']:.4f} | MAPE={test_metrics['MAPE']:.4f}%")
@@ -223,8 +237,8 @@ class BaseTrainer(ABC):
         splitter    = WalkForwardSplitter(**walk_params)
 
         # ── Phase 1: cross-validation ─────────────────────────────────────────
-        val_folds        = []
-        best_global_val  = float("inf")
+        val_folds       = []
+        best_global_val = float("inf")
 
         for split in splitter.get_splits():
             fold = split["fold"]
@@ -270,9 +284,9 @@ class BaseTrainer(ABC):
         for epoch in range(1, avg_best_epoch + 1):
             self._train_epoch(model, optimizer, train_loader)
 
-        train_errors                    = self._collect_train_errors(model, train_loader)
+        train_errors                       = self._collect_train_errors(model, train_loader)
         test_pred, test_true, test_indices = self._run_inference(model, test_loader)
-        test_metrics                    = self._compute_results(test_pred, test_true, train_errors)
+        test_metrics                       = self._compute_results(test_pred, test_true, train_errors)
 
         if verbose >= 1:
             print(f"\n[Test] TC_min={test_metrics['TC_min']:.4f} | MAPE={test_metrics['MAPE']:.4f}%")
@@ -302,7 +316,7 @@ class BaseTrainer(ABC):
         verbose: bool = False,
     ) -> tuple[float, int]:
         """
-        Train for up to `self.epochs` with early stopping.
+        Train for up to `self.epochs` with early stopping on val_metric.
 
         Returns:
             best_val:   Best validation metric seen.
@@ -317,7 +331,6 @@ class BaseTrainer(ABC):
             train_loss = self._train_epoch(model, optimizer, train_loader)
             val_metric = self._val_metric(model, val_loader)
 
-            # Log mỗi 100 epoch, đầu/cuối
             if verbose and (epoch == 1 or epoch % 100 == 0 or epoch == self.epochs):
                 print(f"    [Fold {fold_idx}] Epoch {epoch:>4}/{self.epochs} | train={train_loss:.4f} | val={val_metric:.4f}")
 
@@ -366,9 +379,20 @@ class BaseTrainer(ABC):
         return data.get_loader()
 
     def _build_model(self):
-        return ForecastModel(
-            self.seq_length, self.ff_dim, self.dropout, self.pred_len, self.n_block
-        ).to(self.device)
+        if self.model_type == "tsmixer":
+            return ForecastModel(
+                self.seq_length, self.ff_dim, self.dropout, self.pred_len, self.n_block
+            ).to(self.device)
+        elif self.model_type == "nbeats":
+            return NBEATSModel(
+                self.seq_length, self.pred_len,
+                n_stacks=self.n_stacks,
+                n_layers=self.n_layers,
+                layer_dim=self.layer_dim,
+                dropout=self.dropout,
+            ).to(self.device)
+        else:
+            raise ValueError(f"Unknown model_type: {self.model_type}")
 
     def _train_epoch(self, model, optimizer, loader) -> float:
         model.train()
@@ -427,10 +451,13 @@ class Scenario1Trainer(BaseTrainer):
     def __init__(
         self,
         seq_length: int = 6,
-        ff_dim: int = 128,
-        dropout: float = 0.1,
+        ff_dim: Optional[int] = None,
+        n_block: Optional[int] = None,
+        dropout: Optional[float] = None,
+        n_stacks: Optional[int] = None,
+        n_layers: Optional[int] = None,
+        layer_dim: Optional[int] = None,
         pred_len: int = 3,
-        n_block: int = 1,
         batch_size: int = 4,
         lr: float = 1e-4,
         epochs: int = 100,
@@ -441,13 +468,10 @@ class Scenario1Trainer(BaseTrainer):
         seed: int = 42,
         trial: Optional[object] = None,
         visualizer=None,
+        model_type: str = "tsmixer",
     ):
         super().__init__(
             seq_length=seq_length,
-            ff_dim=ff_dim,
-            dropout=dropout,
-            pred_len=pred_len,
-            n_block=n_block,
             batch_size=batch_size,
             lr=lr,
             epochs=epochs,
@@ -455,11 +479,19 @@ class Scenario1Trainer(BaseTrainer):
             holding_cost=holding_cost,
             lead_time=lead_time,
             ordering_cost=ordering_cost,
+            pred_len=pred_len,
             scenario=1,
             val_metric_type="mape",
             seed=seed,
             trial=trial,
             visualizer=visualizer,
+            model_type=model_type,
+            ff_dim=ff_dim,
+            n_block=n_block,
+            dropout=dropout,
+            n_stacks=n_stacks,
+            n_layers=n_layers,
+            layer_dim=layer_dim,
         )
 
     @torch.no_grad()
@@ -479,10 +511,13 @@ class Scenario2Trainer(BaseTrainer):
     def __init__(
         self,
         seq_length: int = 9,
-        ff_dim: int = 128,
-        dropout: float = 0.1,
+        ff_dim: Optional[int] = None,
+        n_block: Optional[int] = None,
+        dropout: Optional[float] = None,
+        n_stacks: Optional[int] = None,
+        n_layers: Optional[int] = None,
+        layer_dim: Optional[int] = None,
         pred_len: int = 3,
-        n_block: int = 2,
         batch_size: int = 16,
         lr: float = 1e-4,
         epochs: int = 300,
@@ -493,13 +528,10 @@ class Scenario2Trainer(BaseTrainer):
         seed: int = 42,
         trial: Optional[object] = None,
         visualizer=None,
+        model_type: str = "tsmixer",
     ):
         super().__init__(
             seq_length=seq_length,
-            ff_dim=ff_dim,
-            dropout=dropout,
-            pred_len=pred_len,
-            n_block=n_block,
             batch_size=batch_size,
             lr=lr,
             epochs=epochs,
@@ -507,11 +539,19 @@ class Scenario2Trainer(BaseTrainer):
             holding_cost=holding_cost,
             lead_time=lead_time,
             ordering_cost=ordering_cost,
+            pred_len=pred_len,
             scenario=2,
             val_metric_type="tc",
             seed=seed,
             trial=trial,
             visualizer=visualizer,
+            model_type=model_type,
+            ff_dim=ff_dim,
+            n_block=n_block,
+            dropout=dropout,
+            n_stacks=n_stacks,
+            n_layers=n_layers,
+            layer_dim=layer_dim,
         )
 
     @torch.no_grad()
