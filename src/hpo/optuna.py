@@ -64,11 +64,6 @@ class OptunaOptimizer:
         walk_params = build_walk_params(params, self.pred_len)
         loss, metrics = evaluate(trainer, walk_params, params)
 
-        # Lưu avg_best_epoch vào trial để dùng cho final train sau này
-        avg_best_epoch = getattr(trainer, "_cv_avg_best_epoch", self.epochs)
-        trial.set_user_attr("avg_best_epoch", avg_best_epoch)
-        trial.set_user_attr("fold_best_epochs", getattr(trainer, "_cv_best_epochs", []))
-
         with self._lock:
             self.trial_results[trial.number] = {"metrics": metrics}
         self._log_trial(trial, params, loss)
@@ -85,19 +80,15 @@ class OptunaOptimizer:
 
         print(f"\n── Scenario {self.scenario} — Top 3 ─────────────────────────────")
         for rank, trial in enumerate(top3, start=1):
-            result           = self.trial_results.get(trial.number, {})
-            metrics          = result.get("metrics", {})
-            best_epoch       = trial.user_attrs.get("avg_best_epoch", self.epochs)
-            fold_best_epochs = trial.user_attrs.get("fold_best_epochs", [])
+            result  = self.trial_results.get(trial.number, {})
+            metrics = result.get("metrics", {})
 
             torch.save(
                 {
-                    "rank":             rank,
-                    "scenario":         self.scenario,
-                    "val_metric":       trial.value,
-                    "params":           trial.params,
-                    "best_epoch":       best_epoch,
-                    "fold_best_epochs": fold_best_epochs,
+                    "rank":       rank,
+                    "scenario":   self.scenario,
+                    "val_metric": trial.value,
+                    "params":     trial.params,
                 },
                 self.save_dir / f"s{self.scenario}_rank{rank}.pt",
             )
@@ -115,8 +106,6 @@ class OptunaOptimizer:
                 "",
                 "── Validation metric (CV mean) ──────────────────",
                 f"  {val_label:<12}: {trial.value:.4f}",
-                f"  {'Best epoch':<12}: {best_epoch}",
-                f"  {'Per-fold':<12}: {fold_best_epochs}",
                 "",
                 "── CV fold statistics ───────────────────────────",
                 f"  {'fold mean':<12}: {metrics.get('mean', 0):.4f}",
@@ -224,5 +213,5 @@ if __name__ == "__main__":
         n_trials=100,
         val_metric="tc",
         n_jobs=4,
-        resume=False,
+        resume=True,
     ).run()

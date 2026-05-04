@@ -70,6 +70,9 @@ class BaseTrainer(ABC):
 
     # ── Public API ────────────────────────────────────────────────────────────
 
+    OPTUNA_EPOCHS   = 300
+    OPTUNA_PATIENCE = 50
+
     def crossval_loss_for_optuna(
         self,
         walk_params: dict,
@@ -79,6 +82,8 @@ class BaseTrainer(ABC):
     ) -> tuple[float, dict]:
         """
         Run walk-forward cross-validation for Optuna hyperparameter search.
+        Each fold is capped at OPTUNA_EPOCHS (300) with early-stop patience
+        OPTUNA_PATIENCE (50), regardless of self.epochs / self.patience.
 
         Returns:
             mean_loss: Mean validation loss across folds.
@@ -88,41 +93,43 @@ class BaseTrainer(ABC):
         bsz = batch_size or self.batch_size
         splitter = WalkForwardSplitter(**walk_params)
 
-        fold_losses, fold_best_epochs = [], []
+        fold_losses = []
 
-        for fold_idx, split in enumerate(splitter.get_splits()):
-            train_loader = self._make_loader(0, split["train_end"], bsz)
-            val_loader   = self._make_loader(split["train_end"], split["val_end"], bsz)
-            set_seed(self.seed)
-            model     = self._build_model()
-            optimizer = Adam(model.parameters(), lr=self.lr)
+        orig_epochs, orig_patience = self.epochs, self.patience
+        self.epochs  = self.OPTUNA_EPOCHS
+        self.patience = self.OPTUNA_PATIENCE
 
-            best_val, best_epoch = self._train_one_fold(
-                model, optimizer, train_loader, val_loader,
-                fold_idx=fold_idx,
-                min_epochs=min_epochs,
-                verbose=verbose,
-            )
+        try:
+            for fold_idx, split in enumerate(splitter.get_splits()):
+                train_loader = self._make_loader(0, split["train_end"], bsz)
+                val_loader   = self._make_loader(split["train_end"], split["val_end"], bsz)
+                set_seed(self.seed)
+                model     = self._build_model()
+                optimizer = Adam(model.parameters(), lr=self.lr)
 
-            fold_losses.append(best_val)
-            fold_best_epochs.append(best_epoch)
+                best_val, _ = self._train_one_fold(
+                    model, optimizer, train_loader, val_loader,
+                    fold_idx=fold_idx,
+                    min_epochs=min_epochs,
+                    verbose=verbose,
+                )
 
-            if verbose:
-                print(f"    [Fold {fold_idx}] best_val={best_val:.4f} | best_epoch={best_epoch}")
+                fold_losses.append(best_val)
 
-        # Cache for caller to retrieve after Optuna selects best trial
-        self._cv_fold_losses    = fold_losses
-        self._cv_best_epochs    = fold_best_epochs
-        self._cv_avg_best_epoch = int(round(np.median(fold_best_epochs))) if fold_best_epochs else self.epochs
+                if verbose:
+                    print(f"    [Fold {fold_idx}] best_val={best_val:.4f}")
+        finally:
+            # Always restore original values
+            self.epochs  = orig_epochs
+            self.patience = orig_patience
 
         mean_loss = float(np.mean(fold_losses)) if fold_losses else float("inf")
         metrics = {
-            "mean":             mean_loss,
-            "std":              float(np.std(fold_losses))  if fold_losses else 0.0,
-            "min":              float(np.min(fold_losses))  if fold_losses else float("inf"),
-            "max":              float(np.max(fold_losses))  if fold_losses else float("inf"),
-            "fold_losses":      fold_losses,
-            "fold_best_epochs": fold_best_epochs,
+            "mean": mean_loss,
+            "std":  float(np.std(fold_losses))  if fold_losses else 0.0,
+            "min":  float(np.min(fold_losses))  if fold_losses else float("inf"),
+            "max":  float(np.max(fold_losses))  if fold_losses else float("inf"),
+            "fold_losses": fold_losses,
         }
         return mean_loss, metrics
 
@@ -130,8 +137,9 @@ class BaseTrainer(ABC):
         self,
         walk_params: dict,
         batch_size: Optional[int] = None,
-        best_epoch: Optional[int] = None,
         verbose: bool = True,
+        n_epochs: int = 3000,
+        patience: int = 100
     ) -> dict:
         """
         Final training run after Optuna selects best hyperparameters.
@@ -146,9 +154,8 @@ class BaseTrainer(ABC):
         train_loader = self._make_loader(0, final["train_end"], bsz, forecast_horizon)
         test_loader  = self._make_loader(final["test_start"], final["test_end"], bsz, forecast_horizon)
 
-        n_epochs = best_epoch if best_epoch is not None else self.epochs
         if verbose:
-            print(f"  [Train] [0:{final['train_end']}] — max {n_epochs} epochs, early stop patience={self.patience}")
+            print(f"  [Train] [0:{final['train_end']}] — max {n_epochs} epochs, early stop patience={patience}")
 
         set_seed(self.seed)
         model     = self._build_model()
@@ -173,10 +180,10 @@ class BaseTrainer(ABC):
 
             if self.visualizer is not None:
                 self.visualizer.log_epoch(epoch, train_loss, None)
-            if verbose and (epoch == 1 or epoch % 50 == 0 or epoch == n_epochs or no_improve == self.patience):
+            if verbose and (epoch == 1 or epoch % 50 == 0 or epoch == n_epochs or no_improve == patience):
                 print(f"  [Train][NoFold] Epoch {epoch:>3}/{n_epochs} | train={train_loss:.4f} | val={val_loss:.4f}")
 
-            if no_improve >= self.patience:
+            if no_improve >= patience:
                 if verbose:
                     print(f"  [Train][NoFold] Early stop at epoch {epoch}, best_epoch={best_epoch_idx}")
                 break
