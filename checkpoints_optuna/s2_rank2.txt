@@ -7,18 +7,16 @@ Scenario 2 — Rank 2
 ── Hyperparameters ─────────────────────────────
   seq_length  : 12
   n_block     : 3
-  dropout     : 0.1
-  batch_size  : 3
-  ff_dim      : 16
+  dropout     : 0.3
+  batch_size  : 4
+  ff_dim      : 64
   lr          : 0.0001
 
-── Validation metric ────────────────────────────
-  TC_min      : 377970.8775
+── Validation metric (CV mean) ──────────────────
+  TC_min      : 319582.6127
 
-── Test metrics ─────────────────────────────────
-  MAE         : 0.0000
-  MSE         : 0.0000
-  RMSE        : 0.0000
-  MAPE (%)    : 0.0000
-  TC_min      : 0.00
-  c_s*        : 0.0000
+── CV fold statistics ───────────────────────────
+  fold mean   : 0.0000
+  fold std    : 0.0000
+  fold min    : 0.0000
+  fold max    : 0.0000
