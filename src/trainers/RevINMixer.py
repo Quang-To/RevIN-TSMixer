@@ -10,6 +10,7 @@ from src.utils.metrics import mape_loss, compute_metrics, sweep_tc, collect_pred
 from src.models.ForecastModel.ForecastModel import ForecastModel
 from src.models.NBEATSModel.NBEATSModel import NBEATSModel
 from src.models.NHITSModel.NHITSModel import NHITSModel
+from src.models.Decomposition.DecomposedForecastModel import DecomposedForecastModel, HierarchicalDecomposedModel
 from src.data.dataset import TimeSeriesData
 from src.data.walk_forward import WalkForwardSplitter
 
@@ -39,6 +40,16 @@ class BaseTrainer(ABC):
         # NHITS parameters
         n_blocks: Optional[int] = None,
         hidden_dim: Optional[int] = None,
+        # Decomposed model parameters
+        use_decomposition: bool = False,
+        decomposition_method: str = "ma",
+        seasonal_period: int = 4,
+        trend_hidden_dim: Optional[int] = None,
+        trend_n_layers: int = 1,
+        seasonality_model: str = "tsmixer",
+        aggregation_method: str = "sum",
+        learnable_aggregation: bool = False,
+        hierarchical_decomposition: bool = False,
         **kwargs
     ):
         self.seq_length = seq_length
@@ -71,6 +82,17 @@ class BaseTrainer(ABC):
         # NHITS parameters
         self.n_blocks = n_blocks or 1
         self.hidden_dim = hidden_dim or 64
+        
+        # Decomposed model parameters
+        self.use_decomposition = use_decomposition
+        self.decomposition_method = decomposition_method
+        self.seasonal_period = seasonal_period
+        self.trend_hidden_dim = trend_hidden_dim or 32
+        self.trend_n_layers = trend_n_layers
+        self.seasonality_model = seasonality_model
+        self.aggregation_method = aggregation_method
+        self.learnable_aggregation = learnable_aggregation
+        self.hierarchical_decomposition = hierarchical_decomposition
 
 
     OPTUNA_EPOCHS   = 300
@@ -197,6 +219,7 @@ class BaseTrainer(ABC):
         train_errors                       = self._collect_train_errors(model, train_loader)
         test_pred, test_true, test_indices = self._run_inference(model, test_loader)
         test_metrics                       = self._compute_results(test_pred, test_true, train_errors)
+        decomp_components                  = self._collect_decomp_components(model, test_loader) if self.use_decomposition else None
 
         if verbose:
             print(f"\n[Result] Epochs={best_epoch_idx} | TC_min={test_metrics['TC_min']:.4f} | MAPE={test_metrics['MAPE']:.4f}%")
@@ -207,6 +230,7 @@ class BaseTrainer(ABC):
             "test_true":    test_true,
             "test_indices": test_indices,
             "best_epoch":   best_epoch_idx,
+            "decomp_components": decomp_components,
         }
 
     def train_walk_forward(
@@ -367,6 +391,38 @@ class BaseTrainer(ABC):
         return data.get_loader()
 
     def _build_model(self):
+        # Decomposed models
+        if self.use_decomposition:
+            if self.hierarchical_decomposition:
+                return HierarchicalDecomposedModel(
+                    seq_length=self.seq_length,
+                    pred_len=self.pred_len,
+                    n_features=1,
+                    seasonal_period=self.seasonal_period,
+                    dropout=self.dropout,
+                    seasonality_model=self.seasonality_model
+                ).to(self.device)
+            else:
+                return DecomposedForecastModel(
+                    seq_length=self.seq_length,
+                    pred_len=self.pred_len,
+                    n_features=1,
+                    seasonal_period=self.seasonal_period,
+                    decomposition_method=self.decomposition_method,
+                    trend_hidden_dim=self.trend_hidden_dim,
+                    trend_n_layers=self.trend_n_layers,
+                    seasonality_model=self.seasonality_model,
+                    seasonality_hidden_dim=self.hidden_dim,
+                    seasonality_n_blocks=self.n_blocks,
+                    seasonality_n_stacks=self.n_stacks,
+                    seasonality_n_layers=self.n_layers,
+                    seasonality_layer_dim=self.layer_dim,
+                    dropout=self.dropout,
+                    aggregation_method=self.aggregation_method,
+                    learnable_aggregation=self.learnable_aggregation
+                ).to(self.device)
+        
+        # Standard models
         if self.model_type == "tsmixer":
             return ForecastModel(
                 self.seq_length, self.ff_dim, self.dropout, self.pred_len, self.n_block
@@ -419,6 +475,29 @@ class BaseTrainer(ABC):
         _, true, errors, _ = collect_predictions(model, loader, self.device)
         return errors
 
+    @torch.no_grad()
+    def _collect_decomp_components(self, model, loader) -> Optional[dict]:
+        """Collect decomposition component forecasts when supported by model."""
+        if not hasattr(model, "get_component_forecasts"):
+            return None
+
+        model.eval()
+        trend_all, seasonal_all, combined_all = [], [], []
+        for x, _, _ in loader:
+            components = model.get_component_forecasts(x.to(self.device))
+            trend_all.append(components["trend"].detach().cpu().numpy())
+            seasonal_all.append(components["seasonal"].detach().cpu().numpy())
+            combined_all.append(components["combined"].detach().cpu().numpy())
+
+        if not trend_all:
+            return None
+
+        return {
+            "trend": np.concatenate(trend_all).flatten(),
+            "seasonal": np.concatenate(seasonal_all).flatten(),
+            "combined": np.concatenate(combined_all).flatten(),
+        }
+
     def _compute_results(
         self,
         pred: np.ndarray,
@@ -469,6 +548,16 @@ class Scenario1Trainer(BaseTrainer):
         trial: Optional[object] = None,
         visualizer=None,
         model_type: str = "tsmixer",
+        # Decomposed model parameters
+        use_decomposition: bool = True,
+        decomposition_method: str = "ma",
+        seasonal_period: int = 4,
+        trend_hidden_dim: Optional[int] = None,
+        trend_n_layers: int = 1,
+        seasonality_model: str = "tsmixer",
+        aggregation_method: str = "sum",
+        learnable_aggregation: bool = False,
+        hierarchical_decomposition: bool = False,
     ):
         super().__init__(
             seq_length=seq_length,
@@ -494,6 +583,15 @@ class Scenario1Trainer(BaseTrainer):
             layer_dim=layer_dim,
             n_blocks=n_blocks,
             hidden_dim=hidden_dim,
+            use_decomposition=use_decomposition,
+            decomposition_method=decomposition_method,
+            seasonal_period=seasonal_period,
+            trend_hidden_dim=trend_hidden_dim,
+            trend_n_layers=trend_n_layers,
+            seasonality_model=seasonality_model,
+            aggregation_method=aggregation_method,
+            learnable_aggregation=learnable_aggregation,
+            hierarchical_decomposition=hierarchical_decomposition,
         )
 
     @torch.no_grad()
@@ -533,6 +631,16 @@ class Scenario2Trainer(BaseTrainer):
         trial: Optional[object] = None,
         visualizer=None,
         model_type: str = "tsmixer",
+        # Decomposed model parameters
+        use_decomposition: bool = False,
+        decomposition_method: str = "ma",
+        seasonal_period: int = 4,
+        trend_hidden_dim: Optional[int] = None,
+        trend_n_layers: int = 1,
+        seasonality_model: str = "tsmixer",
+        aggregation_method: str = "sum",
+        learnable_aggregation: bool = False,
+        hierarchical_decomposition: bool = False,
     ):
         super().__init__(
             seq_length=seq_length,
@@ -558,6 +666,15 @@ class Scenario2Trainer(BaseTrainer):
             layer_dim=layer_dim,
             n_blocks=n_blocks,
             hidden_dim=hidden_dim,
+            use_decomposition=use_decomposition,
+            decomposition_method=decomposition_method,
+            seasonal_period=seasonal_period,
+            trend_hidden_dim=trend_hidden_dim,
+            trend_n_layers=trend_n_layers,
+            seasonality_model=seasonality_model,
+            aggregation_method=aggregation_method,
+            learnable_aggregation=learnable_aggregation,
+            hierarchical_decomposition=hierarchical_decomposition,
         )
 
     @torch.no_grad()

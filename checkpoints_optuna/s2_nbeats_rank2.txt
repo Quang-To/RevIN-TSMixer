@@ -6,19 +6,32 @@ Scenario 2 — Model NBEATS — Rank 2
   Model       : NBEATS
 
 ── Hyperparameters ─────────────────────────────
-  seq_length  : 12
-  n_stacks    : 3
+  seq_length  : 2
+  n_stacks    : 2
   n_layers    : 2
-  layer_dim   : 256
-  dropout     : 0.1
-  batch_size  : 3
-  lr          : 0.0001
+  layer_dim   : 128
+  dropout     : 0.3
+  batch_size  : 4
+  lr          : 1e-05
+  decomposition_method: savgol
+  seasonal_period: 6
+  trend_hidden_dim: 32
+  trend_n_layers: 2
+  seasonality_model: nhits
+  seasonality_n_stacks: 2
+  seasonality_n_blocks: 1
+  seasonality_n_layers: 3
+  seasonality_hidden_dim: 64
+  seasonality_layer_dim: 64
+  aggregation_method: weighted
+  learnable_aggregation: False
+  hierarchical_decomposition: False
 
 ── Validation metric (CV mean) ──────────────────
-  TC_min      : 265109.4775
+  TC_min      : 208907.9881
 
 ── CV fold statistics ───────────────────────────
-  fold mean   : 265109.4775
-  fold std    : 6408.3464
-  fold min    : 257103.7366
-  fold max    : 272790.8586
+  fold mean   : 208907.9881
+  fold std    : 7030.4757
+  fold min    : 198988.0706
+  fold max    : 214449.1620

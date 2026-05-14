@@ -222,3 +222,77 @@ class TrainingVisualizer:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"[OK] Saved: {save_path}")
         plt.close()
+
+    def plot_decomposition_diagnostics(
+        self,
+        component_forecasts: Dict[str, np.ndarray],
+        true: np.ndarray,
+        scenario: int = 1,
+    ):
+        """Plot decomposition-specific diagnostics for decomp models."""
+        trend = np.asarray(component_forecasts.get("trend", []), dtype=float).flatten()
+        seasonal = np.asarray(component_forecasts.get("seasonal", []), dtype=float).flatten()
+        combined = np.asarray(component_forecasts.get("combined", []), dtype=float).flatten()
+        true = np.asarray(true, dtype=float).flatten()
+
+        n = min(len(trend), len(seasonal), len(combined), len(true))
+        if n == 0:
+            print("[WARN] No decomposition components to visualize")
+            return
+
+        trend = trend[:n]
+        seasonal = seasonal[:n]
+        combined = combined[:n]
+        true = true[:n]
+        t = np.arange(n)
+
+        fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+
+        # Component forecasts over time
+        axes[0, 0].plot(t, true, color="black", linewidth=2, label="Actual")
+        axes[0, 0].plot(t, combined, color="#2E86AB", linestyle="--", linewidth=2, label="Combined")
+        axes[0, 0].plot(t, trend, color="#F18F01", alpha=0.9, label="Trend component")
+        axes[0, 0].plot(t, seasonal, color="#A23B72", alpha=0.9, label="Seasonal/Residual component")
+        axes[0, 0].set_title("Decomposition Components vs Actual", fontsize=12, fontweight="bold")
+        axes[0, 0].set_xlabel("Time Step", fontsize=11, fontweight="bold")
+        axes[0, 0].set_ylabel("Value", fontsize=11, fontweight="bold")
+        axes[0, 0].legend(fontsize=9)
+        axes[0, 0].grid(True, alpha=0.3)
+
+        # Contribution ratio by absolute magnitude
+        abs_trend = np.abs(trend)
+        abs_seasonal = np.abs(seasonal)
+        denom = abs_trend + abs_seasonal + 1e-8
+        trend_ratio = abs_trend / denom
+        seasonal_ratio = abs_seasonal / denom
+        axes[0, 1].plot(t, trend_ratio, color="#F18F01", linewidth=2, label="Trend ratio")
+        axes[0, 1].plot(t, seasonal_ratio, color="#A23B72", linewidth=2, label="Seasonal ratio")
+        axes[0, 1].set_ylim(0, 1)
+        axes[0, 1].set_title("Component Contribution Ratio", fontsize=12, fontweight="bold")
+        axes[0, 1].set_xlabel("Time Step", fontsize=11, fontweight="bold")
+        axes[0, 1].set_ylabel("Ratio", fontsize=11, fontweight="bold")
+        axes[0, 1].legend(fontsize=9)
+        axes[0, 1].grid(True, alpha=0.3)
+
+        # Residual over time
+        residual = true - combined
+        axes[1, 0].axhline(0, color="black", linewidth=1)
+        axes[1, 0].plot(t, residual, color="#C1121F", linewidth=1.8)
+        axes[1, 0].set_title("Final Residual (Actual - Combined)", fontsize=12, fontweight="bold")
+        axes[1, 0].set_xlabel("Time Step", fontsize=11, fontweight="bold")
+        axes[1, 0].set_ylabel("Residual", fontsize=11, fontweight="bold")
+        axes[1, 0].grid(True, alpha=0.3)
+
+        # Predicted vs residual scatter for bias/heteroscedasticity check
+        axes[1, 1].scatter(combined, residual, alpha=0.65, s=28, color="#2E86AB", edgecolors="black", linewidth=0.3)
+        axes[1, 1].axhline(0, color="black", linestyle="--", linewidth=1.5)
+        axes[1, 1].set_title("Residual vs Prediction", fontsize=12, fontweight="bold")
+        axes[1, 1].set_xlabel("Prediction", fontsize=11, fontweight="bold")
+        axes[1, 1].set_ylabel("Residual", fontsize=11, fontweight="bold")
+        axes[1, 1].grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        save_path = self.save_dir / f"scenario_{scenario}_decomposition_diagnostics.png"
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"[OK] Saved: {save_path}")
+        plt.close()

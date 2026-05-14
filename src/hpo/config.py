@@ -1,4 +1,3 @@
-# TSMixer Search Space
 SEARCH_SPACE_TSMIXER: dict[str, list] = {
     "seq_length": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
     "n_block":    [1, 2, 3],
@@ -8,7 +7,6 @@ SEARCH_SPACE_TSMIXER: dict[str, list] = {
     "lr":         [1e-4, 1e-5],
 }
 
-# NBEATS Search Space
 SEARCH_SPACE_NBEATS: dict[str, list] = {
     "seq_length": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
     "n_stacks":   [2, 3, 4],
@@ -19,7 +17,6 @@ SEARCH_SPACE_NBEATS: dict[str, list] = {
     "lr":         [1e-4, 1e-5],
 }
 
-# NHITS Search Space
 SEARCH_SPACE_NHITS: dict[str, list] = {
     "seq_length": [4, 5, 6, 7, 8, 9, 10, 11, 12],
     "dropout":    [0.1, 0.3, 0.5, 0.7, 0.9],
@@ -32,6 +29,22 @@ SEARCH_SPACE_NHITS: dict[str, list] = {
 }
 
 SEARCH_SPACE: dict[str, list] = SEARCH_SPACE_TSMIXER
+
+SEARCH_SPACE_DECOMP: dict[str, list] = {
+    "decomposition_method": ["ma", "savgol"],
+    "seasonal_period": [3, 4, 6],
+    "trend_hidden_dim": [16, 32, 64],
+    "trend_n_layers": [1, 2],
+    "seasonality_model": ["tsmixer", "nbeats", "nhits"],
+    "seasonality_n_stacks": [2, 3],
+    "seasonality_n_blocks": [1, 2, 3],
+    "seasonality_n_layers": [2, 3, 4],
+    "seasonality_hidden_dim": [64, 128, 256],
+    "seasonality_layer_dim": [64, 128, 256],
+    "aggregation_method": ["sum", "weighted"],
+    "learnable_aggregation": [False, True],
+    "hierarchical_decomposition": [False, True],
+}
 
 DEFAULT_WALK_PARAMS = {
     "train_ratio": 0.6,

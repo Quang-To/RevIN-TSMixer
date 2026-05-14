@@ -29,6 +29,15 @@ class OptunaOptimizer:
         resume: bool = False,
         seed: int = 42,
         model_type: str = "tsmixer",
+        use_decomposition: bool = False,
+        decomposition_method: str = "ma",
+        seasonal_period: int = 4,
+        trend_hidden_dim: int = 32,
+        trend_n_layers: int = 1,
+        seasonality_model: str | None = None,
+        aggregation_method: str = "sum",
+        learnable_aggregation: bool = False,
+        hierarchical_decomposition: bool = False,
     ):
         assert scenario in (1, 2), "scenario must be 1 or 2"
         assert model_type in VALID_MODELS, f"model_type must be one of {VALID_MODELS}, got '{model_type}'"
@@ -49,11 +58,21 @@ class OptunaOptimizer:
         self.n_jobs          = n_jobs
         self.resume          = resume
         self.seed            = int(seed)
+        self.use_decomposition = bool(use_decomposition)
+        self.decomposition_method = decomposition_method
+        self.seasonal_period = int(seasonal_period)
+        self.trend_hidden_dim = int(trend_hidden_dim)
+        self.trend_n_layers = int(trend_n_layers)
+        self.seasonality_model = seasonality_model or model_type
+        self.aggregation_method = aggregation_method
+        self.learnable_aggregation = bool(learnable_aggregation)
+        self.hierarchical_decomposition = bool(hierarchical_decomposition)
 
         self.trial_results: dict = {}
         self._lock      = threading.Lock()
-        self.db_path    = f"sqlite:///optuna_s{scenario}_{model_type}.db"
-        self.study_name = f"scenario_{scenario}_{model_type}_optimization"
+        mode_tag = "decomp" if self.use_decomposition else "base"
+        self.db_path    = f"sqlite:///optuna_s{scenario}_{model_type}_{mode_tag}.db"
+        self.study_name = f"scenario_{scenario}_{model_type}_{mode_tag}_optimization"
 
     def _log_trial(self, trial, params, loss):
         print(f"Trial {trial.number} | val_metric = {loss:.4f} | params = {params}")
@@ -62,7 +81,7 @@ class OptunaOptimizer:
         return config_dict_from_obj(self)
 
     def _objective(self, trial):
-        params = sample_params(trial, model_type=self.model_type)
+        params = sample_params(trial, model_type=self.model_type, use_decomposition=self.use_decomposition)
         trainer = make_trainer(self.scenario, params, self._config_dict(), seed=self.seed, trial=trial, model_type=self.model_type)
         walk_params = build_walk_params(params, self.pred_len)
         loss, metrics = evaluate(trainer, walk_params, params)
@@ -159,12 +178,24 @@ class OptunaOptimizer:
         pruner  = optuna.pruners.MedianPruner(n_startup_trials=10)
 
         if self.resume:
-            study = optuna.load_study(study_name=self.study_name, storage=self.db_path)
-            completed = len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
-            logger.info(f"\n📂 Resumed study: {self.study_name}")
-            logger.info(f"   Completed trials : {completed}")
-            if completed > 0:
-                logger.info(f"   Best value so far: {study.best_value:.4f}")
+            try:
+                study = optuna.load_study(study_name=self.study_name, storage=self.db_path)
+                completed = len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
+                logger.info(f"\n📂 Resumed study: {self.study_name}")
+                logger.info(f"   Completed trials : {completed}")
+                if completed > 0:
+                    logger.info(f"   Best value so far: {study.best_value:.4f}")
+            except KeyError:
+                logger.info(f"\nℹ️ Study '{self.study_name}' not found. Creating a new study instead.")
+                study = optuna.create_study(
+                    direction="minimize",
+                    sampler=sampler,
+                    pruner=pruner,
+                    storage=self.db_path,
+                    study_name=self.study_name,
+                )
+                logger.info(f"\n🆕 Created study : {self.study_name}")
+                logger.info(f"   Database       : {self.db_path}")
         else:
             try:
                 optuna.delete_study(study_name=self.study_name, storage=self.db_path)
@@ -183,6 +214,7 @@ class OptunaOptimizer:
         logger.info(f"\n⚙️  Configuration:")
         logger.info(f"   Scenario      : {self.scenario}")
         logger.info(f"   Model         : {self.model_type.upper()}")
+        logger.info(f"   Decomposition : {self.use_decomposition}")
         logger.info(f"   Metric        : {self.val_metric.upper()}")
         logger.info(f"   Trials        : {self.n_trials}")
         logger.info(f"   Parallel jobs : {self.n_jobs}")
@@ -201,9 +233,12 @@ class OptunaOptimizer:
         pruned    = len([t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED])
         failed    = len([t for t in study.trials if t.state == optuna.trial.TrialState.FAIL])
 
+        best_trials = study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
+        best_val_text = f"{study.best_value:.4f}" if best_trials else "N/A"
+
         logger.info(f"\n{'='*60}")
         logger.info(f"✅ Optimisation Complete")
-        logger.info(f"   Scenario {self.scenario} | Best val : {study.best_value:.4f}")
+        logger.info(f"   Scenario {self.scenario} | Best val : {best_val_text}")
         logger.info(f"   Total trials : {len(study.trials)}")
         logger.info(f"   Completed    : {completed}")
         logger.info(f"   Pruned       : {pruned}")
@@ -219,6 +254,7 @@ if __name__ == "__main__":
         n_trials=100,
         val_metric="tc",
         n_jobs=4,
-        resume=True,
-        model_type = 'nhits'
+        resume=False,
+        model_type = 'tsmixer',
+        use_decomposition=True,
     ).run()

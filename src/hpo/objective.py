@@ -1,16 +1,26 @@
-from src.hpo.config import DEFAULT_WALK_PARAMS, SEARCH_SPACE_TSMIXER, SEARCH_SPACE_NBEATS, SEARCH_SPACE_NHITS
+from src.hpo.config import (
+    DEFAULT_WALK_PARAMS,
+    SEARCH_SPACE_TSMIXER,
+    SEARCH_SPACE_NBEATS,
+    SEARCH_SPACE_NHITS,
+    SEARCH_SPACE_DECOMP,
+)
 from src.hpo.trainer_factory import make_trainer
 
-def sample_params(trial, model_type="tsmixer"):
+def sample_params(trial, model_type="tsmixer", use_decomposition: bool = False):
     """Sample hyperparameters from Optuna trial."""
     if model_type == "tsmixer":
-        search_space = SEARCH_SPACE_TSMIXER
+        base_space = SEARCH_SPACE_TSMIXER
     elif model_type == "nbeats":
-        search_space = SEARCH_SPACE_NBEATS
+        base_space = SEARCH_SPACE_NBEATS
     elif model_type == "nhits":
-        search_space = SEARCH_SPACE_NHITS
+        base_space = SEARCH_SPACE_NHITS
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
+
+    search_space = dict(base_space)
+    if use_decomposition:
+        search_space.update(SEARCH_SPACE_DECOMP)
     
     return {k: trial.suggest_categorical(k, v) for k, v in search_space.items()}
 
@@ -39,5 +49,14 @@ def config_dict_from_obj(obj):
         "lead_time": obj.lead_time,
         "ordering_cost": obj.ordering_cost,
         "val_metric": obj.val_metric,
-        "seed": int(obj.seed)
+        "seed": int(obj.seed),
+        "use_decomposition": bool(getattr(obj, "use_decomposition", False)),
+        "decomposition_method": getattr(obj, "decomposition_method", "ma"),
+        "seasonal_period": int(getattr(obj, "seasonal_period", 4)),
+        "trend_hidden_dim": int(getattr(obj, "trend_hidden_dim", 32)),
+        "trend_n_layers": int(getattr(obj, "trend_n_layers", 1)),
+        "seasonality_model": getattr(obj, "seasonality_model", getattr(obj, "model_type", "tsmixer")),
+        "aggregation_method": getattr(obj, "aggregation_method", "sum"),
+        "learnable_aggregation": bool(getattr(obj, "learnable_aggregation", False)),
+        "hierarchical_decomposition": bool(getattr(obj, "hierarchical_decomposition", False)),
     }
