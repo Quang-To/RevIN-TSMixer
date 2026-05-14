@@ -11,11 +11,11 @@ VAL_METRIC = "tc"          # "mape" for Scenario 1, "tc" for Scenario 2
 SEED       = 42
 
 # Model
-SEQ_LENGTH = 11
+SEQ_LENGTH = 12
 PRED_LEN   = 3
 
 # TSMixer specific
-N_BLOCK    = 3
+N_BLOCK    = 2
 FF_DIM     = 128
 
 # NBEATS specific
@@ -24,10 +24,10 @@ N_LAYERS   = 2
 LAYER_DIM  = 256
 
 # Common
-DROPOUT    = 0.3
+DROPOUT    = 0.1
 
 # Training
-BATCH_SIZE = 3
+BATCH_SIZE = 2
 LR         = 1e-4
 EPOCHS     = 3000
 PATIENCE   = 100
