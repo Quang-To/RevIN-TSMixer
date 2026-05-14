@@ -1,4 +1,4 @@
-from src.hpo.config import DEFAULT_WALK_PARAMS, SEARCH_SPACE_TSMIXER, SEARCH_SPACE_NBEATS
+from src.hpo.config import DEFAULT_WALK_PARAMS, SEARCH_SPACE_TSMIXER, SEARCH_SPACE_NBEATS, SEARCH_SPACE_NHITS
 from src.hpo.trainer_factory import make_trainer
 
 def sample_params(trial, model_type="tsmixer"):
@@ -7,6 +7,8 @@ def sample_params(trial, model_type="tsmixer"):
         search_space = SEARCH_SPACE_TSMIXER
     elif model_type == "nbeats":
         search_space = SEARCH_SPACE_NBEATS
+    elif model_type == "nhits":
+        search_space = SEARCH_SPACE_NHITS
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
     

@@ -1,23 +1,13 @@
 import torch
 import torch.nn as nn
-
 from src.models.ForecastModel.RevINNorm.RevINNorm import RevINNorm
-
 
 class NBEATSBlock(nn.Module):
     """
     Single N-BEATS block for a univariate target series.
     Uses a residual MLP over the lookback window to produce backcast and forecast basis terms.
     """
-    def __init__(
-        self,
-        seq_length: int,
-        pred_len: int,
-        n_features: int,
-        n_layers: int,
-        layer_dim: int,
-        dropout: float = 0.0,
-    ):
+    def __init__(self, seq_length: int, pred_len: int, n_features: int, n_layers: int, layer_dim: int, dropout: float = 0.0):
         super().__init__()
         self.seq_length = seq_length
         self.pred_len   = pred_len
@@ -48,11 +38,11 @@ class NBEATSBlock(nn.Module):
             forecast: (batch, pred_len)
             backcast: (batch, seq_length, 1)
         """
-        h = x.squeeze(-1)                # (batch, seq_length)
-        h = self.fc_layers(h)            # (batch, layer_dim)
+        h = x.squeeze(-1)                
+        h = self.fc_layers(h)            
 
-        forecast = self.basis_forecast(h)  # (batch, pred_len)
-        backcast = self.basis_backcast(h).unsqueeze(-1)  # (batch, seq_length, 1)
+        forecast = self.basis_forecast(h)  
+        backcast = self.basis_backcast(h).unsqueeze(-1)  
 
         return forecast, backcast
 
@@ -98,7 +88,7 @@ class NBEATSModel(nn.Module):
         for block in self.stacks:
             block_forecast, backcast = block(residual)
             forecast = forecast + block_forecast
-            residual = residual - backcast  # Doubly residual stacking
+            residual = residual - backcast  
 
         if self.rev_norm.affine:
             target_gamma = self.rev_norm.gamma[:, :, -1]

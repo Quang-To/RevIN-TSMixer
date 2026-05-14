@@ -220,5 +220,5 @@ if __name__ == "__main__":
         val_metric="tc",
         n_jobs=4,
         resume=True,
-        model_type = 'nbeats'
+        model_type = 'nhits'
     ).run()

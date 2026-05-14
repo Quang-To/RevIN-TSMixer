@@ -1,9 +1,10 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
+from typing import Optional
 from src.data.preprocessing import Preprocessing
 
 class TimeSeriesData(Dataset):
-    def __init__(self, seq_length: int, batch_size: int, pred_length: int = 3, split_start: int = 0, split_end: int = None, forecast_horizon: int = 4):
+    def __init__(self, seq_length: int, batch_size: int, pred_length: int = 3, split_start: int = 0, split_end: Optional[int] = None, forecast_horizon: int = 4):
         self.seq_length = seq_length
         self.pred_length = pred_length
         self.batch_size = batch_size
@@ -24,7 +25,6 @@ class TimeSeriesData(Dataset):
         y_start = real_idx + self.seq_length + self.forecast_horizon - 1
         y_end = y_start + self.pred_length
         y = self.data[y_start:y_end, -1]
-        # Trả về chỉ số global của sample đầu tiên trong y (có thể chọn y_start hoặc real_idx)
         return x, y, real_idx
 
     def get_loader(self):

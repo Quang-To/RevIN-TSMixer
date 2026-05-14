@@ -9,6 +9,7 @@ from src.utils.seed import set_seed
 from src.utils.metrics import mape_loss, compute_metrics, sweep_tc, collect_predictions
 from src.models.ForecastModel.ForecastModel import ForecastModel
 from src.models.NBEATSModel.NBEATSModel import NBEATSModel
+from src.models.NHITSModel.NHITSModel import NHITSModel
 from src.data.dataset import TimeSeriesData
 from src.data.walk_forward import WalkForwardSplitter
 
@@ -17,36 +18,16 @@ from src.data.walk_forward import WalkForwardSplitter
 DEFAULT_FORECAST_HORIZON = 4
 GRAD_CLIP_NORM = 5.0
 PRED_CLIP_MIN = 1.0
-DIVERGE_THRESHOLD = 1.5
+DIVERGE_THRESHOLD = 2.0  # Increased from 1.5 to prevent premature pruning
 
 
 # ── Base trainer ──────────────────────────────────────────────────────────────
 
 class BaseTrainer(ABC):
-    """
-    Base class for all scenario trainers.
-    Handles the full walk-forward training loop.
-
-    Subclasses must implement `_val_metric`.
-    """
-
-    def __init__(
-        self,
-        seq_length: int,
-        batch_size: int,
-        lr: float,
-        epochs: int,
-        patience: int,
-        holding_cost: float,
-        lead_time: int,
-        ordering_cost: float,
-        pred_len: int,
-        scenario: int = 1,
-        val_metric_type: str = "mape",
-        seed: int = 42,
-        trial: Optional[object] = None,
-        visualizer=None,
-        model_type: str = "tsmixer",
+    def __init__(self, seq_length: int, batch_size: int, lr: float, epochs: int, patience: int,
+        holding_cost: float, lead_time: int, ordering_cost: float, pred_len: int,
+        scenario: int = 1, val_metric_type: str = "mape", seed: int = 42, trial: Optional[object] = None,
+        visualizer=None, model_type: str = "tsmixer",
         # TSMixer parameters
         ff_dim: Optional[int] = None,
         n_block: Optional[int] = None,
@@ -55,6 +36,10 @@ class BaseTrainer(ABC):
         n_stacks: Optional[int] = None,
         n_layers: Optional[int] = None,
         layer_dim: Optional[int] = None,
+        # NHITS parameters
+        n_blocks: Optional[int] = None,
+        hidden_dim: Optional[int] = None,
+        **kwargs
     ):
         self.seq_length = seq_length
         self.batch_size = batch_size
@@ -83,7 +68,10 @@ class BaseTrainer(ABC):
         self.n_layers = n_layers or 4
         self.layer_dim = layer_dim or 128
 
-    # ── Public API ────────────────────────────────────────────────────────────
+        # NHITS parameters
+        self.n_blocks = n_blocks or 1
+        self.hidden_dim = hidden_dim or 64
+
 
     OPTUNA_EPOCHS   = 300
     OPTUNA_PATIENCE = 50
@@ -391,6 +379,16 @@ class BaseTrainer(ABC):
                 layer_dim=self.layer_dim,
                 dropout=self.dropout,
             ).to(self.device)
+        elif self.model_type == "nhits":
+            return NHITSModel(
+                self.seq_length, self.pred_len,
+                n_features=1,  # Univariate only (NHITS processes last feature)
+                n_stacks=self.n_stacks,
+                n_blocks=self.n_blocks,
+                n_layers=self.n_layers,
+                hidden_dim=self.hidden_dim,
+                dropout=self.dropout,
+            ).to(self.device)
         else:
             raise ValueError(f"Unknown model_type: {self.model_type}")
 
@@ -457,6 +455,8 @@ class Scenario1Trainer(BaseTrainer):
         n_stacks: Optional[int] = None,
         n_layers: Optional[int] = None,
         layer_dim: Optional[int] = None,
+        n_blocks: Optional[int] = None,
+        hidden_dim: Optional[int] = None,
         pred_len: int = 3,
         batch_size: int = 4,
         lr: float = 1e-4,
@@ -492,6 +492,8 @@ class Scenario1Trainer(BaseTrainer):
             n_stacks=n_stacks,
             n_layers=n_layers,
             layer_dim=layer_dim,
+            n_blocks=n_blocks,
+            hidden_dim=hidden_dim,
         )
 
     @torch.no_grad()
@@ -517,6 +519,8 @@ class Scenario2Trainer(BaseTrainer):
         n_stacks: Optional[int] = None,
         n_layers: Optional[int] = None,
         layer_dim: Optional[int] = None,
+        n_blocks: Optional[int] = None,
+        hidden_dim: Optional[int] = None,
         pred_len: int = 3,
         batch_size: int = 16,
         lr: float = 1e-4,
@@ -552,6 +556,8 @@ class Scenario2Trainer(BaseTrainer):
             n_stacks=n_stacks,
             n_layers=n_layers,
             layer_dim=layer_dim,
+            n_blocks=n_blocks,
+            hidden_dim=hidden_dim,
         )
 
     @torch.no_grad()

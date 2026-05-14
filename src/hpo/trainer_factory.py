@@ -10,7 +10,7 @@ def make_trainer(scenario, params, config, seed=42, trial=None, model_type="tsmi
         config: Config dict
         seed: Random seed
         trial: Optuna trial object
-        model_type: "tsmixer" or "nbeats"
+        model_type: "tsmixer", "nbeats", or "nhits"
     """
     TrainerClass = {
         1: Scenario1Trainer,
@@ -53,6 +53,26 @@ def make_trainer(scenario, params, config, seed=42, trial=None, model_type="tsmi
             seed=int(seed),
             trial=trial,
             model_type="nbeats"
+        )
+    elif model_type == "nhits":
+        return TrainerClass(
+            seq_length=params["seq_length"],
+            n_stacks=params["n_stacks"],
+            n_blocks=params["n_blocks"],
+            n_layers=params["n_layers"],
+            hidden_dim=params["hidden_dim"],
+            dropout=params["dropout"],
+            pred_len=config["pred_len"],
+            batch_size=params["batch_size"],
+            lr=params["lr"],
+            epochs=config["epochs"],
+            patience=config["patience"],
+            holding_cost=config["holding_cost"],
+            lead_time=config["lead_time"],
+            ordering_cost=config["ordering_cost"],
+            seed=int(seed),
+            trial=trial,
+            model_type="nhits"
         )
     else:
         raise ValueError(f"Unknown model_type: {model_type}")

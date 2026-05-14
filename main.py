@@ -6,7 +6,7 @@ from src.utils.visualization import TrainingVisualizer
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 SCENARIO   = 2
-MODEL      = "nbeats"  # "tsmixer" or "nbeats"
+MODEL      = "nhits"  # "tsmixer", "nbeats", or "nhits"
 VAL_METRIC = "tc"          # "mape" for Scenario 1, "tc" for Scenario 2
 SEED       = 42
 
@@ -20,14 +20,18 @@ FF_DIM     = 64
 
 # NBEATS specific
 N_STACKS   = 3
-N_LAYERS   = 2
+N_LAYERS   = 3
 LAYER_DIM  = 256
+
+# NHITS specific
+N_BLOCKS   = 1
+HIDDEN_DIM = 128
 
 # Common
 DROPOUT    = 0.1
 
 # Training
-BATCH_SIZE = 3
+BATCH_SIZE = 2
 LR         = 1e-4
 EPOCHS     = 3000
 PATIENCE   = 100
@@ -98,8 +102,28 @@ if __name__ == "__main__":
             visualizer=visualizer,
             model_type="nbeats",
         )
+    elif MODEL == "nhits":
+        trainer = TrainerClass(
+            seq_length=best_params.get("seq_length", SEQ_LENGTH),
+            n_stacks=best_params.get("n_stacks", N_STACKS),
+            n_blocks=best_params.get("n_blocks", N_BLOCKS),
+            n_layers=best_params.get("n_layers", N_LAYERS),
+            hidden_dim=best_params.get("hidden_dim", HIDDEN_DIM),
+            dropout=best_params.get("dropout", DROPOUT),
+            pred_len=PRED_LEN,
+            batch_size=best_params.get("batch_size", BATCH_SIZE),
+            lr=best_params.get("lr", LR),
+            epochs=EPOCHS,         
+            patience=PATIENCE,     
+            holding_cost=HOLDING_COST,
+            ordering_cost=ORDERING_COST,
+            lead_time=LEAD_TIME,
+            seed=SEED,
+            visualizer=visualizer,
+            model_type="nhits",
+        )
     else:
-        raise ValueError(f"Unknown MODEL: {MODEL}")
+        raise ValueError(f"Unknown MODEL: {MODEL}. Must be 'tsmixer', 'nbeats', or 'nhits'")
 
     walk_params = dict(
         seq_length=SEQ_LENGTH,
