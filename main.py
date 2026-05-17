@@ -197,6 +197,13 @@ if __name__ == "__main__":
     )
     print(f"Decomposition enabled : {best_params['use_decomposition']}")
 
+    fixed_epochs = best_epoch
+    if fixed_epochs is None and fold_best_epochs:
+        import numpy as np
+        fixed_epochs = int(round(float(np.median(fold_best_epochs))))
+    if fixed_epochs is not None:
+        print(f"Fixed final epochs   : {fixed_epochs}")
+
     decomp_params = {
         key: _get(best_params, checkpoint.get("decomp_params", {}), key, default)
         for key, default in DECOMP_DEFAULTS.items()
@@ -240,6 +247,8 @@ if __name__ == "__main__":
         verbose    = True,
         n_epochs   = trainer.epochs,
         patience   = trainer.patience,
+        fold_best_epochs = fold_best_epochs,
+        fixed_epochs = fixed_epochs,
     )
 
     result = {

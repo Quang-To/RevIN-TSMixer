@@ -119,6 +119,7 @@ class BaseTrainer(ABC):
         splitter = WalkForwardSplitter(**walk_params)
 
         fold_losses = []
+        fold_best_epochs = []
 
         orig_epochs, orig_patience = self.epochs, self.patience
         self.epochs   = self.OPTUNA_EPOCHS
@@ -132,7 +133,7 @@ class BaseTrainer(ABC):
                 model     = self._build_model()
                 optimizer = Adam(model.parameters(), lr=self.lr)
 
-                best_val, _ = self._train_one_fold(
+                best_val, best_epoch = self._train_one_fold(
                     model, optimizer, train_loader, val_loader,
                     fold_idx=fold_idx,
                     min_epochs=min_epochs,
@@ -140,6 +141,7 @@ class BaseTrainer(ABC):
                 )
 
                 fold_losses.append(best_val)
+                fold_best_epochs.append(best_epoch)
 
                 if verbose:
                     print(f"    [Fold {fold_idx}] best_val={best_val:.4f}")
@@ -154,6 +156,7 @@ class BaseTrainer(ABC):
             "min":        float(np.min(fold_losses))  if fold_losses else float("inf"),
             "max":        float(np.max(fold_losses))  if fold_losses else float("inf"),
             "fold_losses": fold_losses,
+            "fold_best_epochs": fold_best_epochs,
         }
         return mean_loss, metrics
 
@@ -164,57 +167,45 @@ class BaseTrainer(ABC):
         verbose: bool = True,
         n_epochs: int = 3000,
         patience: int = 100,
+        fold_best_epochs: Optional[list[int]] = None,
+        fixed_epochs: Optional[int] = None,
     ) -> dict:
         """
         Final training run after Optuna selects best hyperparameters.
-        Trains on ALL data before the test window (train + val combined),
-        using early stopping monitored on train loss (no separate val set).
+        Trains on ALL data before the test window (train + val combined)
+        for a fixed number of epochs derived from the fold-wise best epochs,
+        then evaluates exactly once on the held-out test window.
         Evaluates once on the held-out test window.
         """
         bsz              = batch_size or self.batch_size
         forecast_horizon = walk_params.get("forecast_horizon", DEFAULT_FORECAST_HORIZON)
         splitter         = WalkForwardSplitter(**walk_params)
         final            = splitter.get_final_test()
+        if fixed_epochs is None:
+            if fold_best_epochs:
+                fixed_epochs = int(round(float(np.median(fold_best_epochs))))
+            else:
+                fixed_epochs = int(n_epochs)
+        fixed_epochs = max(1, int(fixed_epochs))
 
         train_loader = self._make_loader(0, final["train_end"], bsz, forecast_horizon)
         test_loader  = self._make_loader(final["test_start"], final["test_end"], bsz, forecast_horizon)
 
         if verbose:
-            print(f"  [Train] [0:{final['train_end']}] — max {n_epochs} epochs, early stop patience={patience}")
+            print(f"  [Train] [0:{final['train_end']}] — fixed epochs={fixed_epochs}")
 
         set_seed(self.seed)
         model     = self._build_model()
         optimizer = Adam(model.parameters(), lr=self.lr)
 
-        best_loss       = float("inf")
-        best_epoch_idx  = 1
-        no_improve      = 0
-        best_state_dict = None
-
-        for epoch in range(1, n_epochs + 1):
+        for epoch in range(1, fixed_epochs + 1):
             train_loss = self._train_epoch(model, optimizer, train_loader)
-
-            if train_loss < best_loss:
-                best_loss       = train_loss
-                best_epoch_idx  = epoch
-                no_improve      = 0
-                best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            else:
-                no_improve += 1
 
             if self.visualizer is not None:
                 self.visualizer.log_epoch(epoch, train_loss, None)
 
-            if verbose and (epoch == 1 or epoch % 50 == 0 or epoch == n_epochs):
-                print(f"  [Train] Epoch {epoch:>4}/{n_epochs} | train={train_loss:.4f} | best={best_loss:.4f}")
-
-            if no_improve >= patience:
-                if verbose:
-                    print(f"  [Train] Early stop at epoch {epoch}, best_epoch={best_epoch_idx}")
-                break
-
-        if best_state_dict is not None:
-            model.load_state_dict(best_state_dict)
+            if verbose and (epoch == 1 or epoch % 50 == 0 or epoch == fixed_epochs):
+                print(f"  [Train] Epoch {epoch:>4}/{fixed_epochs} | train={train_loss:.4f}")
 
         train_errors                       = self._collect_train_errors(model, train_loader)
         test_pred, test_true, test_indices = self._run_inference(model, test_loader)
@@ -222,14 +213,15 @@ class BaseTrainer(ABC):
         decomp_components                  = self._collect_decomp_components(model, test_loader) if self.use_decomposition else None
 
         if verbose:
-            print(f"\n[Result] Epochs={best_epoch_idx} | TC_min={test_metrics['TC_min']:.4f} | MAPE={test_metrics['MAPE']:.4f}%")
+            print(f"\n[Result] Epochs={fixed_epochs} | TC_min={test_metrics['TC_min']:.4f} | MAPE={test_metrics['MAPE']:.4f}%")
 
         return {
             "metrics":      test_metrics,
             "test_pred":    test_pred,
             "test_true":    test_true,
             "test_indices": test_indices,
-            "best_epoch":   best_epoch_idx,
+            "best_epoch":   fixed_epochs,
+            "fold_best_epochs": fold_best_epochs or [],
             "decomp_components": decomp_components,
         }
 

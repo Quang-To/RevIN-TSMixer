@@ -3,6 +3,7 @@ from pathlib import Path
 import optuna
 import torch
 import logging
+import numpy as np
 from src.utils.seed import set_seed
 from src.hpo.config import VALID_METRICS, VALID_MODELS, DEFAULT_N_STARTUP_TRIALS, DEFAULT_N_EI_CANDIDATES, SUMMARY_EVERY_N
 from src.hpo.trainer_factory import make_trainer
@@ -104,6 +105,8 @@ class OptunaOptimizer:
         for rank, trial in enumerate(top3, start=1):
             result  = self.trial_results.get(trial.number, {})
             metrics = result.get("metrics", {})
+            fold_best_epochs = metrics.get("fold_best_epochs", [])
+            median_best_epoch = int(round(float(np.median(fold_best_epochs)))) if fold_best_epochs else None
 
             torch.save(
                 {
@@ -112,6 +115,9 @@ class OptunaOptimizer:
                     "model_type": self.model_type,
                     "val_metric": trial.value,
                     "params":     trial.params,
+                    "fold_best_epochs": fold_best_epochs,
+                    "best_epoch": median_best_epoch,
+                    "median_best_epoch": median_best_epoch,
                 },
                 self.save_dir / f"s{self.scenario}_{self.model_type}_rank{rank}.pt",
             )
@@ -127,6 +133,10 @@ class OptunaOptimizer:
                 "",
                 "── Hyperparameters ─────────────────────────────",
                 *[f"  {k:<12}: {v}" for k, v in trial.params.items()],
+                "",
+                "── Fold best epochs ────────────────────────────",
+                f"  {'epochs':<12}: {fold_best_epochs}",
+                f"  {'median':<12}: {median_best_epoch}",
                 "",
                 "── Validation metric (CV mean) ──────────────────",
                 f"  {val_label:<12}: {trial.value:.4f}",
@@ -255,6 +265,6 @@ if __name__ == "__main__":
         val_metric="tc",
         n_jobs=4,
         resume=False,
-        model_type = 'tsmixer',
+        model_type = 'nbeats',
         use_decomposition=True,
     ).run()
