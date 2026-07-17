@@ -43,4 +43,15 @@ class InventoryModel:
         # ---- 10. Total cost ----
         total = ordering_cost_total + holding_cost_total + shortage_cost_total
 
-        return total
+        components = {
+            "ordering_cost_total": float(ordering_cost_total),
+            "holding_cost_total": float(holding_cost_total),
+            "shortage_cost_total": float(shortage_cost_total),
+            "q_star": float(q_star),
+            "safety_stock": float(safety_stock),
+            "reorder_point": float(reorder_point),
+            "mu": float(mu),
+            "sigma": float(sigma),
+        }
+
+        return float(total), components

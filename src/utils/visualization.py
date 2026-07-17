@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
+import logging
 
 # Set style
 sns.set_style("whitegrid")
@@ -54,7 +55,7 @@ class TrainingVisualizer:
         plt.tight_layout()
         save_path = self.save_dir / f'scenario_{scenario}_training_history.png'
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"[OK] Saved: {save_path}")
+        logging.info(f"[OK] Saved: {save_path}")
         plt.close()
     
     def plot_predictions_vs_actual(self, pred: np.ndarray, true: np.ndarray, 
@@ -108,7 +109,7 @@ class TrainingVisualizer:
         plt.tight_layout()
         save_path = self.save_dir / f'scenario_{scenario}_predictions.png'
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"[OK] Saved: {save_path}")
+        logging.info(f"[OK] Saved: {save_path}")
         plt.close()
     
     def plot_test_metrics(self, metrics: Dict[str, float], scenario: int = 1):
@@ -148,7 +149,7 @@ class TrainingVisualizer:
         plt.tight_layout()
         save_path = self.save_dir / f'scenario_{scenario}_test_metrics.png'
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"[OK] Saved: {save_path}")
+        logging.info(f"[OK] Saved: {save_path}")
         plt.close()
     
     def plot_comparison_with_baseline(self, pred: np.ndarray, true: np.ndarray,
@@ -182,7 +183,7 @@ class TrainingVisualizer:
         plt.tight_layout()
         save_path = self.save_dir / f'scenario_{scenario}_model_comparison.png'
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"[OK] Saved: {save_path}")
+        logging.info(f"[OK] Saved: {save_path}")
         plt.close()
     
     def plot_metrics_summary(self, metrics: Dict[str, float], epoch: Optional[int] = None, 
@@ -220,7 +221,7 @@ class TrainingVisualizer:
         plt.tight_layout()
         save_path = self.save_dir / f'scenario_{scenario}_metrics_summary.png'
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"[OK] Saved: {save_path}")
+        logging.info(f"[OK] Saved: {save_path}")
         plt.close()
 
     def plot_decomposition_diagnostics(
@@ -237,7 +238,7 @@ class TrainingVisualizer:
 
         n = min(len(trend), len(seasonal), len(combined), len(true))
         if n == 0:
-            print("[WARN] No decomposition components to visualize")
+            logging.warning("No decomposition components to visualize")
             return
 
         trend = trend[:n]
@@ -294,5 +295,5 @@ class TrainingVisualizer:
         plt.tight_layout()
         save_path = self.save_dir / f"scenario_{scenario}_decomposition_diagnostics.png"
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
-        print(f"[OK] Saved: {save_path}")
+        logging.info(f"[OK] Saved: {save_path}")
         plt.close()

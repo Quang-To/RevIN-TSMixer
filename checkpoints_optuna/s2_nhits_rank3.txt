@@ -6,20 +6,47 @@ Scenario 2 — Model NHITS — Rank 3
   Model       : NHITS
 
 ── Hyperparameters ─────────────────────────────
-  seq_length  : 12
-  dropout     : 0.1
-  batch_size  : 2
+  seq_length  : 11
+  dropout     : 0.3
+  batch_size  : 4
   lr          : 0.0001
-  n_stacks    : 3
+  n_stacks    : 2
   n_blocks    : 1
-  n_layers    : 3
+  n_layers    : 2
   hidden_dim  : 256
+  decomposition_method: ma
+  seasonal_period: 3
+  stl_robust  : True
+  stl_seasonal: 7
+  stl_trend   : 11
+  stl_low_pass: None
+  trend_hidden_dim: 32
+  trend_n_layers: 1
+  seasonality_model: nhits
+  seasonality_n_stacks: 2
+  seasonality_n_blocks: 2
+  seasonality_n_layers: 3
+  seasonality_hidden_dim: 256
+  seasonality_layer_dim: 128
+  aggregation_method: sum
+  learnable_aggregation: True
+  hierarchical_decomposition: False
+
+── Fold best epochs ────────────────────────────
+  epochs      : [626, 470, 269]
+  median      : 470
+  final epochs: 470
 
 ── Validation metric (CV mean) ──────────────────
-  TC_min      : 267578.2008
+  TC_min      : 278045.0355
 
 ── CV fold statistics ───────────────────────────
-  fold mean   : 0.0000
-  fold std    : 0.0000
-  fold min    : 0.0000
-  fold max    : 0.0000
+  fold mean   : 278045.0355
+  fold std    : 5416.8535
+  fold min    : 272365.0028
+  fold max    : 285336.6104
+
+── Final evaluation ───────────────────────────
+  final_epochs: 470
+  final_Tc_min: 311594.7952
+  final_MAPE  : 2.1617

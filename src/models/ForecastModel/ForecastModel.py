@@ -6,12 +6,12 @@ from src.models.ForecastModel.MixingLayer.MixerBlock import MixerBlock
 from src.models.ForecastModel.TemporalProjectionLayer.TemporalProjectionLayer import TemporalProjectionLayer
 
 class ForecastModel(nn.Module):
-    def __init__(self, seq_length: int, ff_dim: int, dropout: float, pred_len: int, n_block: int):
+    def __init__(self, seq_length: int, ff_dim: int, dropout: float, pred_len: int, n_block: int, n_features: int = 6):
         super().__init__()
-        self.rev_norm = RevINNorm()
+        self.rev_norm = RevINNorm(num_features=n_features)
 
         self.mixer_blocks = nn.ModuleList(
-            [MixerBlock(seq_length=seq_length, ff_dim=ff_dim, dropout=dropout) for _ in range(n_block)]
+            [MixerBlock(seq_length=seq_length, ff_dim=ff_dim, dropout=dropout, num_features=n_features) for _ in range(n_block)]
         )
         self.temporal_projection = TemporalProjectionLayer(seq_length=seq_length, pred_len=pred_len)
 

@@ -14,12 +14,39 @@ Scenario 2 — Model NHITS — Rank 1
   n_blocks    : 1
   n_layers    : 3
   hidden_dim  : 256
+  decomposition_method: stl
+  seasonal_period: 6
+  stl_robust  : False
+  stl_seasonal: 9
+  stl_trend   : 11
+  stl_low_pass: 9
+  trend_hidden_dim: 64
+  trend_n_layers: 1
+  seasonality_model: nhits
+  seasonality_n_stacks: 2
+  seasonality_n_blocks: 2
+  seasonality_n_layers: 4
+  seasonality_hidden_dim: 256
+  seasonality_layer_dim: 64
+  aggregation_method: sum
+  learnable_aggregation: True
+  hierarchical_decomposition: False
+
+── Fold best epochs ────────────────────────────
+  epochs      : [145, 47, 116]
+  median      : 116
+  final epochs: 116
 
 ── Validation metric (CV mean) ──────────────────
-  TC_min      : 266681.0403
+  TC_min      : 270446.4134
 
 ── CV fold statistics ───────────────────────────
-  fold mean   : 266681.0403
-  fold std    : 6426.0019
-  fold min    : 258756.2909
-  fold max    : 274495.5586
+  fold mean   : 270446.4134
+  fold std    : 7276.6218
+  fold min    : 265272.7901
+  fold max    : 280737.0587
+
+── Final evaluation ───────────────────────────
+  final_epochs: 116
+  final_Tc_min: 288808.0034
+  final_MAPE  : 1.4978

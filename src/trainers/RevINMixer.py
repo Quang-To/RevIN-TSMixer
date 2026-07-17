@@ -4,6 +4,7 @@ from torch.optim import Adam
 from typing import Optional
 from abc import ABC, abstractmethod
 import optuna as _optuna
+import logging
 
 from src.utils.seed import set_seed
 from src.utils.metrics import mape_loss, compute_metrics, sweep_tc, collect_predictions
@@ -44,6 +45,10 @@ class BaseTrainer(ABC):
         use_decomposition: bool = False,
         decomposition_method: str = "ma",
         seasonal_period: int = 4,
+        stl_robust: bool = True,
+        stl_seasonal: int = 7,
+        stl_trend: Optional[int] = None,
+        stl_low_pass: Optional[int] = None,
         trend_hidden_dim: Optional[int] = None,
         trend_n_layers: int = 1,
         seasonality_model: str = "tsmixer",
@@ -87,15 +92,16 @@ class BaseTrainer(ABC):
         self.use_decomposition = use_decomposition
         self.decomposition_method = decomposition_method
         self.seasonal_period = seasonal_period
+        self.stl_robust = bool(stl_robust)
+        self.stl_seasonal = int(stl_seasonal)
+        self.stl_trend = stl_trend
+        self.stl_low_pass = stl_low_pass
         self.trend_hidden_dim = trend_hidden_dim or 32
         self.trend_n_layers = trend_n_layers
         self.seasonality_model = seasonality_model
         self.aggregation_method = aggregation_method
         self.learnable_aggregation = learnable_aggregation
         self.hierarchical_decomposition = hierarchical_decomposition
-
-
-    OPTUNA_EPOCHS   = 300
     OPTUNA_PATIENCE = 50
 
     def crossval_loss_for_optuna(
@@ -105,16 +111,12 @@ class BaseTrainer(ABC):
         verbose: bool = False,
         min_epochs: int = 20,
     ) -> tuple[float, dict]:
-        """
-        Run walk-forward cross-validation for Optuna hyperparameter search.
-        Each fold is capped at OPTUNA_EPOCHS (300) with early-stop patience
-        OPTUNA_PATIENCE (50), regardless of self.epochs / self.patience.
-
-        Returns:
-            mean_loss: Mean validation loss across folds.
-            metrics:   Dict with fold-level statistics.
-        """
-        walk_params = {**walk_params, "forecast_horizon": DEFAULT_FORECAST_HORIZON}
+        # Use forecast_horizon from walk_params when present. Fall back to
+        # pred_length (as provided by build_walk_params) or the default.
+        fh = walk_params.get("forecast_horizon")
+        if fh is None:
+            fh = walk_params.get("pred_length", DEFAULT_FORECAST_HORIZON)
+        walk_params = {**walk_params, "forecast_horizon": fh}
         bsz = batch_size or self.batch_size
         splitter = WalkForwardSplitter(**walk_params)
 
@@ -122,7 +124,6 @@ class BaseTrainer(ABC):
         fold_best_epochs = []
 
         orig_epochs, orig_patience = self.epochs, self.patience
-        self.epochs   = self.OPTUNA_EPOCHS
         self.patience = self.OPTUNA_PATIENCE
 
         try:
@@ -136,6 +137,7 @@ class BaseTrainer(ABC):
                 best_val, best_epoch = self._train_one_fold(
                     model, optimizer, train_loader, val_loader,
                     fold_idx=fold_idx,
+                    max_epochs=None,
                     min_epochs=min_epochs,
                     verbose=verbose,
                 )
@@ -144,7 +146,7 @@ class BaseTrainer(ABC):
                 fold_best_epochs.append(best_epoch)
 
                 if verbose:
-                    print(f"    [Fold {fold_idx}] best_val={best_val:.4f}")
+                    logging.debug(f"    [Fold {fold_idx}] best_val={best_val:.4f}")
         finally:
             self.epochs   = orig_epochs
             self.patience = orig_patience
@@ -192,7 +194,7 @@ class BaseTrainer(ABC):
         test_loader  = self._make_loader(final["test_start"], final["test_end"], bsz, forecast_horizon)
 
         if verbose:
-            print(f"  [Train] [0:{final['train_end']}] — fixed epochs={fixed_epochs}")
+            logging.debug(f"  [Train] [0:{final['train_end']}] — fixed epochs={fixed_epochs}")
 
         set_seed(self.seed)
         model     = self._build_model()
@@ -205,7 +207,7 @@ class BaseTrainer(ABC):
                 self.visualizer.log_epoch(epoch, train_loss, None)
 
             if verbose and (epoch == 1 or epoch % 50 == 0 or epoch == fixed_epochs):
-                print(f"  [Train] Epoch {epoch:>4}/{fixed_epochs} | train={train_loss:.4f}")
+                logging.debug(f"  [Train] Epoch {epoch:>4}/{fixed_epochs} | train={train_loss:.4f}")
 
         train_errors                       = self._collect_train_errors(model, train_loader)
         test_pred, test_true, test_indices = self._run_inference(model, test_loader)
@@ -213,7 +215,7 @@ class BaseTrainer(ABC):
         decomp_components                  = self._collect_decomp_components(model, test_loader) if self.use_decomposition else None
 
         if verbose:
-            print(f"\n[Result] Epochs={fixed_epochs} | TC_min={test_metrics['TC_min']:.4f} | MAPE={test_metrics['MAPE']:.4f}%")
+            logging.debug(f"\n[Result] Epochs={fixed_epochs} | TC_min={test_metrics['TC_min']:.4f} | MAPE={test_metrics['MAPE']:.4f}%")
 
         return {
             "metrics":      test_metrics,
@@ -247,7 +249,7 @@ class BaseTrainer(ABC):
         for split in splitter.get_splits():
             fold = split["fold"]
             if verbose >= 1:
-                print(f"\n[Fold {fold}] train_end={split['train_end']} | val_end={split['val_end']}")
+                logging.debug(f"\n[Fold {fold}] train_end={split['train_end']} | val_end={split['val_end']}")
 
             train_loader = self._make_loader(0, split["train_end"], bsz)
             val_loader   = self._make_loader(split["train_end"], split["val_end"], bsz)
@@ -259,6 +261,7 @@ class BaseTrainer(ABC):
             best_val, best_epoch = self._train_one_fold(
                 model, optimizer, train_loader, val_loader,
                 fold_idx=fold,
+                max_epochs=self.epochs,
                 verbose=(verbose >= 2),
             )
 
@@ -266,12 +269,12 @@ class BaseTrainer(ABC):
             best_global_val = min(best_global_val, best_val)
 
             if verbose >= 1:
-                print(f"  → Best val: {best_val:.4f} (epoch {best_epoch})")
+                logging.debug(f"  → Best val: {best_val:.4f} (epoch {best_epoch})")
 
         avg_best_epoch = int(round(np.median([f["best_epoch"] for f in val_folds]))) if val_folds else self.epochs
         if verbose >= 1 and val_folds:
             mean_val = np.mean([f["best_val"] for f in val_folds])
-            print(f"\n[CV Summary] mean val={mean_val:.4f} | avg_best_epoch={avg_best_epoch}")
+            logging.debug(f"\n[CV Summary] mean val={mean_val:.4f} | avg_best_epoch={avg_best_epoch}")
 
         # ── Phase 2: retrain on all pre-test data ─────────────────────────────
         final        = splitter.get_final_test()
@@ -279,7 +282,7 @@ class BaseTrainer(ABC):
         test_loader  = self._make_loader(final["test_start"], final["test_end"], bsz)
 
         if verbose >= 1:
-            print(f"\n[Phase2] Retrain [0:{final['train_end']}] — {avg_best_epoch} epochs")
+            logging.debug(f"\n[Phase2] Retrain [0:{final['train_end']}] — {avg_best_epoch} epochs")
 
         set_seed(self.seed)
         model     = self._build_model()
@@ -293,7 +296,7 @@ class BaseTrainer(ABC):
         test_metrics                       = self._compute_results(test_pred, test_true, train_errors)
 
         if verbose >= 1:
-            print(f"\n[Test] TC_min={test_metrics['TC_min']:.4f} | MAPE={test_metrics['MAPE']:.4f}%")
+            logging.debug(f"\n[Test] TC_min={test_metrics['TC_min']:.4f} | MAPE={test_metrics['MAPE']:.4f}%")
 
         return {
             "val_folds": val_folds,
@@ -316,6 +319,7 @@ class BaseTrainer(ABC):
         train_loader,
         val_loader,
         fold_idx: int = 0,
+        max_epochs: Optional[int] = None,
         min_epochs: int = 1,
         verbose: bool = False,
     ) -> tuple[float, int]:
@@ -331,12 +335,15 @@ class BaseTrainer(ABC):
         """
         best_val, best_epoch, no_improve = float("inf"), 1, 0
 
-        for epoch in range(1, self.epochs + 1):
+        epoch = 0
+        while True:
+            epoch += 1
             train_loss = self._train_epoch(model, optimizer, train_loader)
             val_metric = self._val_metric(model, val_loader)
 
-            if verbose and (epoch == 1 or epoch % 100 == 0 or epoch == self.epochs):
-                print(f"    [Fold {fold_idx}] Epoch {epoch:>4}/{self.epochs} | train={train_loss:.4f} | val={val_metric:.4f}")
+            if verbose and (epoch == 1 or epoch % 100 == 0 or (max_epochs is not None and epoch == max_epochs)):
+                total_epochs = max_epochs if max_epochs is not None else "∞"
+                logging.debug(f"    [Fold {fold_idx}] Epoch {epoch:>4}/{total_epochs} | train={train_loss:.4f} | val={val_metric:.4f}")
 
             if val_metric < best_val:
                 best_val, best_epoch, no_improve = val_metric, epoch, 0
@@ -345,12 +352,17 @@ class BaseTrainer(ABC):
 
             if epoch >= min_epochs and val_metric > best_val * DIVERGE_THRESHOLD:
                 if verbose:
-                    print(f"    [Fold {fold_idx}] Diverging → prune")
+                    logging.debug(f"    [Fold {fold_idx}] Diverging → prune")
                 raise _optuna.exceptions.TrialPruned()
 
             if no_improve >= self.patience:
                 if verbose:
-                    print(f"    [Fold {fold_idx}] Early stop epoch {epoch}, best_epoch={best_epoch}")
+                    logging.debug(f"    [Fold {fold_idx}] Early stop epoch {epoch}, best_epoch={best_epoch}")
+                break
+
+            if max_epochs is not None and epoch >= max_epochs:
+                if verbose:
+                    logging.debug(f"    [Fold {fold_idx}] Reached max_epochs={max_epochs}, best_epoch={best_epoch}")
                 break
 
             self._maybe_report_to_optuna(fold_idx, epoch, val_metric)
@@ -401,6 +413,10 @@ class BaseTrainer(ABC):
                     n_features=1,
                     seasonal_period=self.seasonal_period,
                     decomposition_method=self.decomposition_method,
+                    stl_robust=self.stl_robust,
+                    stl_seasonal=self.stl_seasonal,
+                    stl_trend=self.stl_trend,
+                    stl_low_pass=self.stl_low_pass,
                     trend_hidden_dim=self.trend_hidden_dim,
                     trend_n_layers=self.trend_n_layers,
                     seasonality_model=self.seasonality_model,
@@ -430,7 +446,7 @@ class BaseTrainer(ABC):
         elif self.model_type == "nhits":
             return NHITSModel(
                 self.seq_length, self.pred_len,
-                n_features=1,  # Univariate only (NHITS processes last feature)
+                n_features=1,
                 n_stacks=self.n_stacks,
                 n_blocks=self.n_blocks,
                 n_layers=self.n_layers,
@@ -470,24 +486,91 @@ class BaseTrainer(ABC):
     @torch.no_grad()
     def _collect_decomp_components(self, model, loader) -> Optional[dict]:
         """Collect decomposition component forecasts when supported by model."""
-        if not hasattr(model, "get_component_forecasts"):
+        if not hasattr(model, "get_component_forecasts") or not hasattr(model, "decomposition"):
             return None
 
         model.eval()
         trend_all, seasonal_all, combined_all = [], [], []
+        trend_branch_all, seasonal_branch_all = [], []
+        raw_trend_all, raw_seasonal_all, raw_residual_all = [], [], []
+        target_all = []
+        first_batch = True
         for x, _, _ in loader:
+            raw_trend, raw_seasonal, raw_residual = model.decomposition(x.to(self.device))
+            raw_trend_all.append(raw_trend.detach().cpu().numpy())
+            raw_seasonal_all.append(raw_seasonal.detach().cpu().numpy())
+            raw_residual_all.append(raw_residual.detach().cpu().numpy())
+            target_all.append(x[:, :, -1].detach().cpu().numpy())
+
             components = model.get_component_forecasts(x.to(self.device))
             trend_all.append(components["trend"].detach().cpu().numpy())
             seasonal_all.append(components["seasonal"].detach().cpu().numpy())
             combined_all.append(components["combined"].detach().cpu().numpy())
 
+            # Keep explicit branch outputs for one-by-one inspection.
+            trend_branch_all.append(components.get("trend", torch.empty(0)).detach().cpu().numpy())
+            seasonal_branch_all.append(components.get("seasonal", torch.empty(0)).detach().cpu().numpy())
+
+            # One-time debug prints to inspect RevIN stats and component forecasts
+            if first_batch:
+                try:
+                    logging.debug("\n[DEBG] Decomposition debug — first batch:")
+                    # Trend branch RevIN
+                    try:
+                        tb_rev = model.trend_branch.rev_norm
+                        logging.debug("[DEBG] Trend RevIN mean: %s", None if tb_rev.mean is None else tb_rev.mean.detach().cpu().numpy().shape)
+                        logging.debug("[DEBG] Trend RevIN std: %s", None if tb_rev.std is None else tb_rev.std.detach().cpu().numpy().shape)
+                        if getattr(tb_rev, 'gamma', None) is not None:
+                            logging.debug("[DEBG] Trend RevIN gamma: %s", tb_rev.gamma.detach().cpu().numpy().shape)
+                            logging.debug("[DEBG] Trend RevIN beta: %s", tb_rev.beta.detach().cpu().numpy().shape)
+                    except Exception as e:
+                        logging.debug("[DEBG] Trend RevIN inspect failed: %s", e)
+
+                    # Seasonality branch RevIN (if available)
+                    try:
+                        sb_model = getattr(model.seasonality_branch, 'model', None)
+                        if sb_model is not None and hasattr(sb_model, 'rev_norm'):
+                            sb_rev = sb_model.rev_norm
+                            logging.debug("[DEBG] Seasonal RevIN mean: %s", None if sb_rev.mean is None else sb_rev.mean.detach().cpu().numpy().shape)
+                            logging.debug("[DEBG] Seasonal RevIN std: %s", None if sb_rev.std is None else sb_rev.std.detach().cpu().numpy().shape)
+                            if getattr(sb_rev, 'gamma', None) is not None:
+                                logging.debug("[DEBG] Seasonal RevIN gamma: %s", sb_rev.gamma.detach().cpu().numpy().shape)
+                                logging.debug("[DEBG] Seasonal RevIN beta: %s", sb_rev.beta.detach().cpu().numpy().shape)
+                        else:
+                            logging.debug("[DEBG] Seasonal branch has no RevIN or model attribute")
+                    except Exception as e:
+                        logging.debug("[DEBG] Seasonal RevIN inspect failed: %s", e)
+
+                    # Component forecast summaries
+                    try:
+                        t = components['trend']
+                        s = components['seasonal']
+                        c = components['combined']
+                        logging.debug(f"[DEBG] trend forecast mean/std: {t.mean().item():.4f} / {t.std().item():.4f}")
+                        logging.debug(f"[DEBG] seasonal forecast mean/std: {s.mean().item():.4f} / {s.std().item():.4f}")
+                        logging.debug(f"[DEBG] combined forecast mean/std: {c.mean().item():.4f} / {c.std().item():.4f}")
+                    except Exception as e:
+                        logging.debug("[DEBG] Component forecast inspect failed: %s", e)
+                finally:
+                    first_batch = False
+
         if not trend_all:
             return None
 
         return {
-            "trend": np.concatenate(trend_all).flatten(),
-            "seasonal": np.concatenate(seasonal_all).flatten(),
+            "raw_trend": np.concatenate(raw_trend_all).flatten(),
+            "raw_seasonal": np.concatenate(raw_seasonal_all).flatten(),
+            "raw_residual": np.concatenate(raw_residual_all).flatten(),
+            "raw_target": np.concatenate(target_all).flatten(),
+            "trend_branch": np.concatenate(trend_branch_all).flatten(),
+            "seasonal_branch": np.concatenate(seasonal_branch_all).flatten(),
             "combined": np.concatenate(combined_all).flatten(),
+            "aggregation_method": getattr(model.aggregation, "aggregation_method", None),
+            "trend_weight": float(model.aggregation.trend_weight.detach().cpu().item()) if hasattr(model.aggregation, "trend_weight") else None,
+            "seasonal_weight": float(model.aggregation.seasonal_weight.detach().cpu().item()) if hasattr(model.aggregation, "seasonal_weight") else None,
+            # Visualizer expects keys 'trend' and 'seasonal' — provide aliases
+            "trend": np.concatenate(trend_branch_all).flatten(),
+            "seasonal": np.concatenate(seasonal_branch_all).flatten(),
         }
 
     def _compute_results(
@@ -497,14 +580,14 @@ class BaseTrainer(ABC):
         train_errors: Optional[np.ndarray] = None,
     ) -> dict:
         metrics = compute_metrics(pred, true)
-        tc_min, cs_star = sweep_tc(
+        tc_min, cs_star, tc_components = sweep_tc(
             pred,
             forecast_errors=train_errors if train_errors is not None else np.zeros_like(pred),
             holding_cost=self.holding_cost,
             lead_time=self.lead_time,
             ordering_cost=self.ordering_cost,
         )
-        metrics.update({"TC_min": tc_min, "c_s_star": cs_star})
+        metrics.update({"TC_min": tc_min, "c_s_star": cs_star, "TC_components": tc_components})
         return metrics
 
     @abstractmethod
@@ -544,6 +627,10 @@ class Scenario1Trainer(BaseTrainer):
         use_decomposition: bool = True,
         decomposition_method: str = "ma",
         seasonal_period: int = 4,
+        stl_robust: bool = True,
+        stl_seasonal: int = 7,
+        stl_trend: Optional[int] = None,
+        stl_low_pass: Optional[int] = None,
         trend_hidden_dim: Optional[int] = None,
         trend_n_layers: int = 1,
         seasonality_model: str = "tsmixer",
@@ -578,6 +665,10 @@ class Scenario1Trainer(BaseTrainer):
             use_decomposition=use_decomposition,
             decomposition_method=decomposition_method,
             seasonal_period=seasonal_period,
+            stl_robust=stl_robust,
+            stl_seasonal=stl_seasonal,
+            stl_trend=stl_trend,
+            stl_low_pass=stl_low_pass,
             trend_hidden_dim=trend_hidden_dim,
             trend_n_layers=trend_n_layers,
             seasonality_model=seasonality_model,
@@ -627,6 +718,10 @@ class Scenario2Trainer(BaseTrainer):
         use_decomposition: bool = False,
         decomposition_method: str = "ma",
         seasonal_period: int = 4,
+        stl_robust: bool = True,
+        stl_seasonal: int = 7,
+        stl_trend: Optional[int] = None,
+        stl_low_pass: Optional[int] = None,
         trend_hidden_dim: Optional[int] = None,
         trend_n_layers: int = 1,
         seasonality_model: str = "tsmixer",
@@ -661,6 +756,10 @@ class Scenario2Trainer(BaseTrainer):
             use_decomposition=use_decomposition,
             decomposition_method=decomposition_method,
             seasonal_period=seasonal_period,
+            stl_robust=stl_robust,
+            stl_seasonal=stl_seasonal,
+            stl_trend=stl_trend,
+            stl_low_pass=stl_low_pass,
             trend_hidden_dim=trend_hidden_dim,
             trend_n_layers=trend_n_layers,
             seasonality_model=seasonality_model,
@@ -683,7 +782,7 @@ class Scenario2Trainer(BaseTrainer):
         true_np = np.concatenate(all_trues).flatten()
         errors  = true_np - pred_np
 
-        tc_min, _ = sweep_tc(
+        tc_min, _, _ = sweep_tc(
             pred_np,
             forecast_errors=errors,
             holding_cost=self.holding_cost,

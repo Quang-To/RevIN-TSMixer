@@ -33,6 +33,10 @@ class OptunaOptimizer:
         use_decomposition: bool = False,
         decomposition_method: str = "ma",
         seasonal_period: int = 4,
+        stl_robust: bool = True,
+        stl_seasonal: int = 7,
+        stl_trend: int | None = None,
+        stl_low_pass: int | None = None,
         trend_hidden_dim: int = 32,
         trend_n_layers: int = 1,
         seasonality_model: str | None = None,
@@ -62,6 +66,10 @@ class OptunaOptimizer:
         self.use_decomposition = bool(use_decomposition)
         self.decomposition_method = decomposition_method
         self.seasonal_period = int(seasonal_period)
+        self.stl_robust = bool(stl_robust)
+        self.stl_seasonal = int(stl_seasonal)
+        self.stl_trend = stl_trend
+        self.stl_low_pass = stl_low_pass
         self.trend_hidden_dim = int(trend_hidden_dim)
         self.trend_n_layers = int(trend_n_layers)
         self.seasonality_model = seasonality_model or model_type
@@ -76,19 +84,159 @@ class OptunaOptimizer:
         self.study_name = f"scenario_{scenario}_{model_type}_{mode_tag}_optimization"
 
     def _log_trial(self, trial, params, loss):
-        print(f"Trial {trial.number} | val_metric = {loss:.4f} | params = {params}")
+        logger.debug(f"Trial {trial.number} | val_metric = {loss:.4f} | params = {params}")
 
     def _config_dict(self):
         return config_dict_from_obj(self)
+
+    def _trial_checkpoint_path(self, trial_number: int) -> Path:
+        return self.save_dir / f"s{self.scenario}_{self.model_type}_trial{trial_number}.pt"
+
+    def _normalize_fold_best_epochs(self, fold_best_epochs):
+        if not fold_best_epochs:
+            return []
+        return [int(epoch) for epoch in fold_best_epochs if epoch is not None]
+
+    def _build_checkpoint_payload(self, trial, params, loss, metrics, *, rank: int | None = None, final_result=None):
+        fold_best_epochs = self._normalize_fold_best_epochs(
+            metrics.get("fold_best_epochs", []) if isinstance(metrics, dict) else []
+        )
+        fold_losses = metrics.get("fold_losses", []) if isinstance(metrics, dict) else []
+        median_best_epoch = int(round(float(np.median(fold_best_epochs)))) if fold_best_epochs else None
+
+        payload = {
+            "trial_number": getattr(trial, "number", None),
+            "value": float(loss),
+            "val_metric": float(loss),
+            "params": params,
+            "metrics": metrics,
+            "fold_best_epochs": fold_best_epochs,
+            "best_epoch": median_best_epoch,
+            "cv_median_best_epoch": median_best_epoch,
+            "fold_losses": fold_losses,
+            "cv_mean": float(metrics.get("mean", float(np.mean(fold_losses)) if fold_losses else float("inf"))) if isinstance(metrics, dict) else float("inf"),
+            "cv_std": float(metrics.get("std", float(np.std(fold_losses)) if fold_losses else 0.0)) if isinstance(metrics, dict) else 0.0,
+            "cv_min": float(metrics.get("min", float(np.min(fold_losses)) if fold_losses else float("inf"))) if isinstance(metrics, dict) else float("inf"),
+            "cv_max": float(metrics.get("max", float(np.max(fold_losses)) if fold_losses else float("inf"))) if isinstance(metrics, dict) else float("inf"),
+        }
+        if rank is not None:
+            payload["rank"] = rank
+        if final_result is not None:
+            payload["final_result"] = final_result
+        return payload
+
+    def _checkpoint_matches_trial(self, payload, trial) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        payload_trial_number = payload.get("trial_number")
+        if payload_trial_number is not None:
+            return payload_trial_number == trial.number
+        return payload.get("params") == getattr(trial, "params", {})
+
+    def _save_trial_checkpoint(self, trial, params, loss, metrics) -> None:
+        try:
+            payload = self._build_checkpoint_payload(trial, params, loss, metrics)
+            self.save_dir.mkdir(parents=True, exist_ok=True)
+            torch.save(payload, self._trial_checkpoint_path(trial.number))
+        except Exception:
+            logger.exception(f"Failed to persist trial checkpoint for trial {trial.number}")
+
+    def _load_trial_checkpoint(self, trial):
+        candidates = [self._trial_checkpoint_path(trial.number)]
+        candidates.extend(sorted(self.save_dir.glob(f"s{self.scenario}_{self.model_type}_rank*.pt")))
+
+        for path in candidates:
+            if not path.exists():
+                continue
+            try:
+                try:
+                    payload = torch.load(path, map_location="cpu", weights_only=False)
+                except TypeError:
+                    payload = torch.load(path, map_location="cpu")
+            except Exception:
+                continue
+            if self._checkpoint_matches_trial(payload, trial):
+                return payload
+        return None
+
+    def _build_trial_summary(self, trial):
+        result = self.trial_results.get(trial.number, {})
+        metrics = result.get("metrics", {}) if isinstance(result, dict) else {}
+        fold_best_epochs = self._normalize_fold_best_epochs(metrics.get("fold_best_epochs") if isinstance(metrics, dict) else [])
+        fallback_value = float(trial.value) if trial.value is not None else float("inf")
+
+        checkpoint = None
+        if not metrics or not fold_best_epochs:
+            checkpoint = self._load_trial_checkpoint(trial)
+
+        if checkpoint and not metrics:
+            metrics = checkpoint.get("metrics", {}) if isinstance(checkpoint.get("metrics"), dict) else {}
+            fold_best_epochs = self._normalize_fold_best_epochs(checkpoint.get("fold_best_epochs"))
+            if not fold_best_epochs and checkpoint.get("best_epoch") is not None:
+                fold_best_epochs = [int(checkpoint.get("best_epoch"))]
+
+        if not metrics:
+            ua = trial.user_attrs if hasattr(trial, "user_attrs") else {}
+            fold_losses = ua.get("fold_losses") if isinstance(ua, dict) else []
+            if not fold_losses and checkpoint:
+                fold_losses = checkpoint.get("fold_losses", [])
+            fold_best_epochs = self._normalize_fold_best_epochs(
+                (ua.get("fold_best_epochs") if isinstance(ua, dict) else None)
+                or (checkpoint.get("fold_best_epochs") if checkpoint else None)
+            )
+            if not fold_best_epochs and checkpoint and checkpoint.get("best_epoch") is not None:
+                fold_best_epochs = [int(checkpoint.get("best_epoch"))]
+            metrics = {
+                "mean": (ua.get("cv_mean") if isinstance(ua, dict) else None)
+                if isinstance(ua, dict) and ua.get("cv_mean") is not None
+                else (checkpoint.get("cv_mean") if checkpoint and checkpoint.get("cv_mean") is not None else (float(np.mean(fold_losses)) if fold_losses else fallback_value)),
+                "std": (ua.get("cv_std") if isinstance(ua, dict) else None)
+                if isinstance(ua, dict) and ua.get("cv_std") is not None
+                else (checkpoint.get("cv_std") if checkpoint and checkpoint.get("cv_std") is not None else (float(np.std(fold_losses)) if fold_losses else 0.0)),
+                "min": (ua.get("cv_min") if isinstance(ua, dict) else None)
+                if isinstance(ua, dict) and ua.get("cv_min") is not None
+                else (checkpoint.get("cv_min") if checkpoint and checkpoint.get("cv_min") is not None else (float(np.min(fold_losses)) if fold_losses else fallback_value)),
+                "max": (ua.get("cv_max") if isinstance(ua, dict) else None)
+                if isinstance(ua, dict) and ua.get("cv_max") is not None
+                else (checkpoint.get("cv_max") if checkpoint and checkpoint.get("cv_max") is not None else (float(np.max(fold_losses)) if fold_losses else fallback_value)),
+                "fold_losses": fold_losses,
+                "fold_best_epochs": fold_best_epochs,
+            }
+
+        if not fold_best_epochs:
+            fold_best_epochs = self._normalize_fold_best_epochs(
+                (trial.user_attrs.get("fold_best_epochs") if hasattr(trial, "user_attrs") else None)
+                or (checkpoint.get("fold_best_epochs") if checkpoint else None)
+            )
+            if not fold_best_epochs and checkpoint and checkpoint.get("best_epoch") is not None:
+                fold_best_epochs = [int(checkpoint.get("best_epoch"))]
+
+        return metrics, fold_best_epochs, checkpoint
 
     def _objective(self, trial):
         params = sample_params(trial, model_type=self.model_type, use_decomposition=self.use_decomposition)
         trainer = make_trainer(self.scenario, params, self._config_dict(), seed=self.seed, trial=trial, model_type=self.model_type)
         walk_params = build_walk_params(params, self.pred_len)
         loss, metrics = evaluate(trainer, walk_params, params)
+        # Persist fold-level epoch info into Optuna trial user attributes so it
+        # survives process restarts (resume).
+        try:
+            fold_best_epochs = metrics.get("fold_best_epochs", []) if isinstance(metrics, dict) else []
+            trial.set_user_attr("fold_best_epochs", fold_best_epochs)
+            trial.set_user_attr("cv_median_best_epoch", int(round(float(np.median(fold_best_epochs)))) if fold_best_epochs else None)
+            if isinstance(metrics, dict):
+                trial.set_user_attr("fold_losses", metrics.get("fold_losses", []))
+                trial.set_user_attr("cv_mean", float(metrics.get("mean", float("inf"))))
+                trial.set_user_attr("cv_std", float(metrics.get("std", 0.0)))
+                trial.set_user_attr("cv_min", float(metrics.get("min", float("inf"))))
+                trial.set_user_attr("cv_max", float(metrics.get("max", float("inf"))))
+        except Exception:
+            # non-critical if cannot set user attrs (e.g., trial is not a real Optuna trial)
+            pass
 
         with self._lock:
             self.trial_results[trial.number] = {"metrics": metrics}
+        self._save_trial_checkpoint(trial, params, loss, metrics)
         self._log_trial(trial, params, loss)
         return loss
 
@@ -96,31 +244,48 @@ class OptunaOptimizer:
 
     def _save_top3(self, study: optuna.Study) -> None:
         self.save_dir.mkdir(parents=True, exist_ok=True)
+        completed_trials = [
+            t for t in study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE and t.value is not None
+        ]
         top3 = sorted(
-            study.trials,
+            completed_trials,
             key=lambda t: t.value if t.value is not None else float("inf"),
         )[:3]
 
-        print(f"\n── Scenario {self.scenario} — Model {self.model_type.upper()} — Top 3 ──────────────────────────")
-        for rank, trial in enumerate(top3, start=1):
-            result  = self.trial_results.get(trial.number, {})
-            metrics = result.get("metrics", {})
-            fold_best_epochs = metrics.get("fold_best_epochs", [])
-            median_best_epoch = int(round(float(np.median(fold_best_epochs)))) if fold_best_epochs else None
+        if not top3:
+            logger.info(f"\n── Scenario {self.scenario} — Model {self.model_type.upper()} — No COMPLETE trials to save.")
+            return
 
-            torch.save(
-                {
-                    "rank":       rank,
-                    "scenario":   self.scenario,
-                    "model_type": self.model_type,
-                    "val_metric": trial.value,
-                    "params":     trial.params,
-                    "fold_best_epochs": fold_best_epochs,
-                    "best_epoch": median_best_epoch,
-                    "median_best_epoch": median_best_epoch,
-                },
-                self.save_dir / f"s{self.scenario}_{self.model_type}_rank{rank}.pt",
-            )
+        logger.info(f"\n── Scenario {self.scenario} — Model {self.model_type.upper()} — Top 3 ──────────────────────────")
+        for rank, trial in enumerate(top3, start=1):
+            metrics, fold_best_epochs, checkpoint = self._build_trial_summary(trial)
+
+            median_best_epoch = int(round(float(np.median(fold_best_epochs)))) if fold_best_epochs else None
+            final_train_epochs = median_best_epoch
+            # Run final training with the fold-wise best epochs to get final test metrics
+            final_result = None
+            try:
+                trainer = make_trainer(self.scenario, trial.params, self._config_dict(), seed=self.seed, trial=None, model_type=self.model_type)
+                walk_params = build_walk_params(trial.params, self.pred_len)
+                final_result = trainer.train_and_test_with_best_hparams(
+                    walk_params,
+                    batch_size=trial.params.get("batch_size"),
+                    verbose=False,
+                    fold_best_epochs=fold_best_epochs,
+                    fixed_epochs=final_train_epochs,
+                )
+            except Exception as e:
+                # don't fail the whole saving process if final training fails
+                logger.exception(f"Final training failed for trial {trial.number}: {e}")
+
+            payload = self._build_checkpoint_payload(trial, trial.params, trial.value, metrics, rank=rank, final_result=final_result)
+            payload.update({
+                "scenario": self.scenario,
+                "model_type": self.model_type,
+                "final_train_epochs": final_train_epochs,
+            })
+            torch.save(payload, self.save_dir / f"s{self.scenario}_{self.model_type}_rank{rank}.pt")
 
             val_label = "MAPE (%)" if self.val_metric == "mape" else "TC_min"
             lines = [
@@ -137,6 +302,7 @@ class OptunaOptimizer:
                 "── Fold best epochs ────────────────────────────",
                 f"  {'epochs':<12}: {fold_best_epochs}",
                 f"  {'median':<12}: {median_best_epoch}",
+                f"  {'final epochs':<12}: {final_train_epochs}",
                 "",
                 "── Validation metric (CV mean) ──────────────────",
                 f"  {val_label:<12}: {trial.value:.4f}",
@@ -147,10 +313,21 @@ class OptunaOptimizer:
                 f"  {'fold min':<12}: {metrics.get('min', 0):.4f}",
                 f"  {'fold max':<12}: {metrics.get('max', 0):.4f}",
             ]
+
+            # Append final evaluation summary if available
+            if final_result is not None:
+                final_metrics = final_result.get('metrics', {})
+                lines.extend([
+                    "",
+                    "── Final evaluation ───────────────────────────",
+                    f"  {'final_epochs':<12}: {final_result.get('best_epoch', 'N/A')}",
+                    f"  {'final_Tc_min':<12}: {final_metrics.get('TC_min', 0):.4f}",
+                    f"  {'final_MAPE':<12}: {final_metrics.get('MAPE', 0):.4f}",
+                ])
             (self.save_dir / f"s{self.scenario}_{self.model_type}_rank{rank}.txt").write_text(
                 "\n".join(lines), encoding="utf-8"
             )
-            print(f"  Rank {rank} | val={trial.value:.4f} | saved → s{self.scenario}_{self.model_type}_rank{rank}.pt / .txt")
+            logger.info(f"  Rank {rank} | val={trial.value:.4f} | saved → s{self.scenario}_{self.model_type}_rank{rank}.pt / .txt")
 
     # ── Callback ──────────────────────────────────────────────────────────────
 

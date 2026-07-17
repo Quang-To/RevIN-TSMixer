@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from src.models.ForecastModel.RevINNorm.RevINNorm import RevINNorm
 class TrendBranch(nn.Module):
     """
     Lightweight trend forecasting branch.
@@ -21,6 +22,7 @@ class TrendBranch(nn.Module):
         self.pred_len = pred_len
         self.n_features = n_features
         self.n_layers = n_layers
+        self.rev_norm = RevINNorm(num_features=n_features, affine=False)
         
         # Flatten input
         input_dim = seq_length * n_features
@@ -54,10 +56,13 @@ class TrendBranch(nn.Module):
         # Flatten: (batch, seq_length * n_features)
         x_flat = x.reshape(x.size(0), -1)
         
-        # Forecast
-        forecast = self.model(x_flat)
-        
-        return forecast
+        # Normalize input (RevIN) and denormalize output so scale is preserved
+        x_norm = self.rev_norm(x, mode="norm")  # (batch, seq_len, n_features)
+        x_norm_flat = x_norm.reshape(x_norm.size(0), -1)
+        forecast_norm = self.model(x_norm_flat)
+        # denorm expects shape (batch, pred_len, n_features)
+        forecast_denorm = self.rev_norm(forecast_norm.unsqueeze(-1), mode="denorm").squeeze(-1)
+        return forecast_denorm
 
 
 class SeasonalityBranch(nn.Module):
@@ -88,7 +93,8 @@ class SeasonalityBranch(nn.Module):
                 pred_len=pred_len,
                 ff_dim=model_kwargs.get("ff_dim", 64),
                 dropout=model_kwargs.get("dropout", 0.1),
-                n_block=model_kwargs.get("n_block", 2)
+                n_block=model_kwargs.get("n_block", 2),
+                n_features=n_features,
             )
         elif model_type == "nhits":
             from src.models.NHITSModel.NHITSModel import NHITSModel
@@ -172,7 +178,9 @@ class AggregationLayer(nn.Module):
                 w2 = self.seasonal_weight / (total_weight + 1e-8)
                 return w1 * trend_forecast + w2 * seasonal_forecast
             else:
-                return 0.5 * trend_forecast + 0.5 * seasonal_forecast
+                # Non-learnable weighted mode: interpret as equal contribution
+                # but follow paper logic where components are summed.
+                return trend_forecast + seasonal_forecast
         
         elif self.aggregation_method == "attention":
             # Compute attention weights

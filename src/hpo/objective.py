@@ -21,6 +21,7 @@ def sample_params(trial, model_type="tsmixer", use_decomposition: bool = False):
     search_space = dict(base_space)
     if use_decomposition:
         search_space.update(SEARCH_SPACE_DECOMP)
+        search_space["seasonality_model"] = [model_type]
     
     return {k: trial.suggest_categorical(k, v) for k, v in search_space.items()}
 
@@ -53,6 +54,10 @@ def config_dict_from_obj(obj):
         "use_decomposition": bool(getattr(obj, "use_decomposition", False)),
         "decomposition_method": getattr(obj, "decomposition_method", "ma"),
         "seasonal_period": int(getattr(obj, "seasonal_period", 4)),
+        "stl_robust": bool(getattr(obj, "stl_robust", True)),
+        "stl_seasonal": int(getattr(obj, "stl_seasonal", 7)),
+        "stl_trend": getattr(obj, "stl_trend", None),
+        "stl_low_pass": getattr(obj, "stl_low_pass", None),
         "trend_hidden_dim": int(getattr(obj, "trend_hidden_dim", 32)),
         "trend_n_layers": int(getattr(obj, "trend_n_layers", 1)),
         "seasonality_model": getattr(obj, "seasonality_model", getattr(obj, "model_type", "tsmixer")),

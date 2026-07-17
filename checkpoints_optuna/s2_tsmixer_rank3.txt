@@ -1,52 +1,50 @@
-Scenario 2 — Model NHITS — Rank 2
+Scenario 2 — Model TSMIXER — Rank 3
 ==================================================
 
 ── Loss Configuration ──────────────────────────
   Val Metric  : TC
-  Model       : NHITS
+  Model       : TSMIXER
 
 ── Hyperparameters ─────────────────────────────
-  seq_length  : 11
-  dropout     : 0.1
-  batch_size  : 2
+  seq_length  : 12
+  n_block     : 3
+  dropout     : 0.5
+  batch_size  : 3
+  ff_dim      : 64
   lr          : 0.0001
-  n_stacks    : 2
-  n_blocks    : 2
-  n_layers    : 3
-  hidden_dim  : 128
-  decomposition_method: savgol
+  decomposition_method: ma
   seasonal_period: 4
   stl_robust  : False
-  stl_seasonal: 7
+  stl_seasonal: 9
   stl_trend   : 9
-  stl_low_pass: None
-  trend_hidden_dim: 32
+  stl_low_pass: 9
+  trend_hidden_dim: 64
   trend_n_layers: 2
-  seasonality_model: nhits
+  seasonality_model: tsmixer
   seasonality_n_stacks: 3
-  seasonality_n_blocks: 3
+  seasonality_n_blocks: 2
   seasonality_n_layers: 3
-  seasonality_hidden_dim: 128
-  seasonality_layer_dim: 128
+  seasonality_hidden_dim: 64
+  seasonality_layer_dim: 256
   aggregation_method: weighted
-  learnable_aggregation: False
+  learnable_aggregation: True
   hierarchical_decomposition: False
 
 ── Fold best epochs ────────────────────────────
-  epochs      : [202, 230, 464]
-  median      : 230
-  final epochs: 230
+  epochs      : [1, 1, 1]
+  median      : 1
+  final epochs: 1
 
 ── Validation metric (CV mean) ──────────────────
-  TC_min      : 273638.2853
+  TC_min      : 303078.6595
 
 ── CV fold statistics ───────────────────────────
-  fold mean   : 273638.2853
-  fold std    : 7170.6554
-  fold min    : 265075.9278
-  fold max    : 282624.9899
+  fold mean   : 303078.6595
+  fold std    : 39091.9682
+  fold min    : 251473.2556
+  fold max    : 346055.0240
 
 ── Final evaluation ───────────────────────────
-  final_epochs: 230
-  final_Tc_min: 314019.1606
-  final_MAPE  : 2.3038
+  final_epochs: 1
+  final_Tc_min: 366306.8683
+  final_MAPE  : 37.0812

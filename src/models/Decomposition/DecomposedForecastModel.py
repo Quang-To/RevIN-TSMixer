@@ -32,6 +32,11 @@ class DecomposedForecastModel(nn.Module):
         n_features: int = 1,
         seasonal_period: int = 4,
         decomposition_method: str = "ma",
+        # STL-specific decomposition parameters
+        stl_robust: bool = True,
+        stl_seasonal: int = 7,
+        stl_trend: int | None = None,
+        stl_low_pass: int | None = None,
         # Trend branch
         trend_hidden_dim: int = 32,
         trend_n_layers: int = 1,
@@ -53,7 +58,8 @@ class DecomposedForecastModel(nn.Module):
             pred_len: Prediction length
             n_features: Number of input features
             seasonal_period: Expected seasonal period
-            decomposition_method: "ma" or "savgol"
+            decomposition_method: "ma", "savgol", or "stl"
+            stl_robust/stl_seasonal/stl_trend/stl_low_pass: STL tuning knobs
             
             Trend branch parameters:
             - trend_hidden_dim: Hidden dimension for MLP
@@ -80,7 +86,11 @@ class DecomposedForecastModel(nn.Module):
         self.decomposition = TimeSeriesDecomposition(
             seq_length=seq_length,
             seasonal_period=seasonal_period,
-            method=decomposition_method
+            method=decomposition_method,
+            stl_robust=stl_robust,
+            stl_seasonal=stl_seasonal,
+            stl_trend=stl_trend,
+            stl_low_pass=stl_low_pass,
         )
         
         # 2. Trend branch - lightweight

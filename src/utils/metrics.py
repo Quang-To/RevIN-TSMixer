@@ -26,16 +26,24 @@ def compute_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> dict:
 # ── Inventory cost sweep ──────────────────────────────────────────────────────
 
 def sweep_tc(pred: np.ndarray, forecast_errors: np.ndarray, holding_cost: float = 2.0,
-    lead_time: int = 2, ordering_cost: float = 50_000, n_steps: int = 1000,) -> tuple[float, Optional[float]]:
+    lead_time: int = 2, ordering_cost: float = 50_000, n_steps: int = 1000,) -> tuple[float, Optional[float], dict]:
     pred = np.clip(pred, 1.0, None)
     best_tc, best_cs = float("inf"), None
+    best_components = {}
     for cs in np.linspace(0.01, 10.0, n_steps):
-        tc = InventoryModel(cs, holding_cost, lead_time, ordering_cost).total_cost(
+        tc_result = InventoryModel(cs, holding_cost, lead_time, ordering_cost).total_cost(
             pred, forecast_errors=forecast_errors
         )
+        # InventoryModel.total_cost now returns (total, components)
+        if isinstance(tc_result, tuple) and len(tc_result) == 2:
+            tc, components = tc_result
+        else:
+            tc = float(tc_result)
+            components = {}
+
         if np.isfinite(tc) and tc < best_tc:
-            best_tc, best_cs = tc, cs
-    return best_tc, best_cs
+            best_tc, best_cs, best_components = float(tc), float(cs), components
+    return best_tc, best_cs, best_components
 
 
 # ── Prediction collector ──────────────────────────────────────────────────────
