@@ -6,7 +6,13 @@ fold from scratch twice, and checks that the fold best epochs, median epoch,
 and final epoch match the saved checkpoint metadata.
 """
 
+import sys
 from pathlib import Path
+
+# Add project root to sys.path to support direct execution
+project_root = str(Path(__file__).resolve().parents[2])
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
 import numpy as np
 import torch
@@ -60,7 +66,7 @@ def _build_config(params: dict) -> dict:
         "ordering_cost": ORDERING_COST,
         "seed": SEED,
         "use_decomposition": any(key in params for key in DECOMP_KEYS),
-        "decomposition_method": params.get("decomposition_method", "ma"),
+        "decomposition_method": params.get("decomposition_method", "stl"),
         "seasonal_period": params.get("seasonal_period", 4),
         "stl_robust": params.get("stl_robust", True),
         "stl_seasonal": params.get("stl_seasonal", 7),

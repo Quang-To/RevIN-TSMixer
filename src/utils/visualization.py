@@ -297,3 +297,93 @@ class TrainingVisualizer:
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
         logging.info(f"[OK] Saved: {save_path}")
         plt.close()
+
+    def plot_time_series_decomposition(
+        self,
+        component_forecasts: Dict[str, np.ndarray],
+        scenario: int = 1,
+        seq_length: int = 12,
+    ):
+        """Plot the raw decomposition of the input time series (Original, Trend, Seasonal, Residual)."""
+        raw_target = component_forecasts.get("raw_target")
+        raw_trend = component_forecasts.get("raw_trend")
+        raw_seasonal = component_forecasts.get("raw_seasonal")
+        raw_residual = component_forecasts.get("raw_residual")
+
+        if any(x is None or len(x) == 0 for x in [raw_target, raw_trend, raw_seasonal, raw_residual]):
+            logging.warning("Missing some raw decomposition components. Skipping raw decomposition plot.")
+            return
+
+        # Helper to reconstruct continuous series from overlapping windows
+        def reconstruct(flat_arr):
+            n_samples = len(flat_arr) // seq_length
+            if n_samples == 0:
+                return np.array([])
+            reshaped = flat_arr.reshape(n_samples, seq_length)
+            return np.concatenate([reshaped[0], reshaped[1:, -1]])
+
+        target = reconstruct(raw_target)
+        trend = reconstruct(raw_trend)
+        seasonal = reconstruct(raw_seasonal)
+        residual = reconstruct(raw_residual)
+
+        n = min(len(target), len(trend), len(seasonal), len(residual))
+        if n == 0:
+            logging.warning("Reconstructed series are empty. Skipping plot.")
+            return
+
+        target, trend, seasonal, residual = target[:n], trend[:n], seasonal[:n], residual[:n]
+        t = np.arange(n)
+
+        # Compute statistics for residual
+        std_val = float(np.std(residual))
+        median_val = float(np.median(residual))
+
+        # Create plot: 4 subplots vertically stacked
+        fig, axes = plt.subplots(4, 1, figsize=(14, 12), sharex=True)
+
+        # 1. Original
+        axes[0].plot(t, target, color="#2B2D42", linewidth=2, label="Original")
+        axes[0].set_title(f"Scenario {scenario} — Time Series Decomposition", fontsize=14, fontweight="bold")
+        axes[0].set_ylabel("Original", fontsize=11, fontweight="bold")
+        axes[0].grid(True, alpha=0.3)
+        axes[0].legend(loc="upper left")
+
+        # 2. Trend
+        axes[1].plot(t, trend, color="#D90429", linewidth=2, label="Trend")
+        axes[1].set_ylabel("Trend", fontsize=11, fontweight="bold")
+        axes[1].grid(True, alpha=0.3)
+        axes[1].legend(loc="upper left")
+
+        # 3. Seasonal
+        axes[2].plot(t, seasonal, color="#008080", linewidth=2, label="Seasonal")
+        axes[2].set_ylabel("Seasonal", fontsize=11, fontweight="bold")
+        axes[2].grid(True, alpha=0.3)
+        axes[2].legend(loc="upper left")
+
+        # 4. Residual
+        axes[3].plot(t, residual, color="#8D99AE", linewidth=1.5, label="Residual")
+        axes[3].axhline(0, color="red", linestyle="--", linewidth=1.2, alpha=0.8)
+        axes[3].set_ylabel("Residual", fontsize=11, fontweight="bold")
+        axes[3].set_xlabel("Time Step", fontsize=11, fontweight="bold")
+        axes[3].grid(True, alpha=0.3)
+        axes[3].legend(loc="upper left")
+
+        # Add stats text box to the residual plot
+        stats_text = f"Residual Stats:\nStd Dev = {std_val:.4f}\nMedian = {median_val:.4f}"
+        props = dict(boxstyle="round,pad=0.5", facecolor="#FFF3CD", edgecolor="#FFEBAA", alpha=0.9)
+        axes[3].text(
+            0.02, 0.95,
+            stats_text,
+            transform=axes[3].transAxes,
+            fontsize=10,
+            fontweight="bold",
+            verticalalignment="top",
+            bbox=props
+        )
+
+        plt.tight_layout()
+        save_path = self.save_dir / f"scenario_{scenario}_time_series_decomposition.png"
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        logging.info(f"[OK] Saved: {save_path}")
+        plt.close()

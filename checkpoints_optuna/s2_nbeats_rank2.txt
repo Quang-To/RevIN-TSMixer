@@ -6,46 +6,33 @@ Scenario 2 — Model NBEATS — Rank 2
   Model       : NBEATS
 
 ── Hyperparameters ─────────────────────────────
-  seq_length  : 12
-  n_stacks    : 2
+  seq_length  : 11
+  n_stacks    : 3
   n_layers    : 4
-  layer_dim   : 64
-  dropout     : 0.5
-  batch_size  : 3
-  lr          : 1e-05
-  decomposition_method: savgol
-  seasonal_period: 3
-  stl_robust  : True
+  layer_dim   : 128
+  dropout     : 0.1
+  batch_size  : 4
+  lr          : 0.0001
+  seasonal_period: 4
   stl_seasonal: 5
-  stl_trend   : None
-  stl_low_pass: 11
-  trend_hidden_dim: 64
-  trend_n_layers: 1
+  stl_trend   : 9
   seasonality_model: nbeats
-  seasonality_n_stacks: 2
-  seasonality_n_blocks: 3
-  seasonality_n_layers: 2
-  seasonality_hidden_dim: 128
-  seasonality_layer_dim: 256
-  aggregation_method: weighted
-  learnable_aggregation: True
-  hierarchical_decomposition: False
 
 ── Fold best epochs ────────────────────────────
-  epochs      : [1, 1, 1]
-  median      : 1
-  final epochs: 1
+  epochs      : [199, 190, 216]
+  median      : 199
+  final epochs: 199
 
 ── Validation metric (CV mean) ──────────────────
-  TC_min      : 304553.9409
+  TC_min      : 267616.4886
 
 ── CV fold statistics ───────────────────────────
-  fold mean   : 304553.9409
-  fold std    : 24780.1429
-  fold min    : 272261.2718
-  fold max    : 332488.8661
+  fold mean   : 267616.4886
+  fold std    : 6621.7792
+  fold min    : 258389.1152
+  fold max    : 273613.5136
 
 ── Final evaluation ───────────────────────────
-  final_epochs: 1
-  final_Tc_min: 350049.9398
-  final_MAPE  : 42.9884
+  final_epochs: 199
+  final_Tc_min: 309087.6847
+  final_MAPE  : 1.1748

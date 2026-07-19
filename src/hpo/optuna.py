@@ -1,5 +1,12 @@
-import threading
+import sys
 from pathlib import Path
+
+# Add project root to sys.path to support direct execution
+project_root = str(Path(__file__).resolve().parents[2])
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+import threading
 import optuna
 import torch
 import logging
@@ -31,7 +38,7 @@ class OptunaOptimizer:
         seed: int = 42,
         model_type: str = "tsmixer",
         use_decomposition: bool = False,
-        decomposition_method: str = "ma",
+        decomposition_method: str = "stl",
         seasonal_period: int = 4,
         stl_robust: bool = True,
         stl_seasonal: int = 7,
@@ -43,6 +50,7 @@ class OptunaOptimizer:
         aggregation_method: str = "sum",
         learnable_aggregation: bool = False,
         hierarchical_decomposition: bool = False,
+        use_log_return: bool = False,
     ):
         assert scenario in (1, 2), "scenario must be 1 or 2"
         assert model_type in VALID_MODELS, f"model_type must be one of {VALID_MODELS}, got '{model_type}'"
@@ -76,10 +84,13 @@ class OptunaOptimizer:
         self.aggregation_method = aggregation_method
         self.learnable_aggregation = bool(learnable_aggregation)
         self.hierarchical_decomposition = bool(hierarchical_decomposition)
+        self.use_log_return = bool(use_log_return)
 
         self.trial_results: dict = {}
         self._lock      = threading.Lock()
         mode_tag = "decomp" if self.use_decomposition else "base"
+        if self.use_log_return:
+            mode_tag = f"{mode_tag}_logret"
         self.db_path    = f"sqlite:///optuna_s{scenario}_{model_type}_{mode_tag}.db"
         self.study_name = f"scenario_{scenario}_{model_type}_{mode_tag}_optimization"
 
@@ -214,8 +225,26 @@ class OptunaOptimizer:
         return metrics, fold_best_epochs, checkpoint
 
     def _objective(self, trial):
+        torch.set_num_threads(1)
         params = sample_params(trial, model_type=self.model_type, use_decomposition=self.use_decomposition)
-        trainer = make_trainer(self.scenario, params, self._config_dict(), seed=self.seed, trial=trial, model_type=self.model_type)
+        
+        # Assign GPU dynamically if multiple are available
+        if torch.cuda.is_available():
+            num_gpus = torch.cuda.device_count()
+            gpu_id = trial.number % num_gpus
+            device = torch.device(f"cuda:{gpu_id}")
+        else:
+            device = torch.device("cpu")
+            
+        trainer = make_trainer(
+            self.scenario,
+            params,
+            self._config_dict(),
+            seed=self.seed,
+            trial=trial,
+            model_type=self.model_type,
+            device=device
+        )
         walk_params = build_walk_params(params, self.pred_len)
         loss, metrics = evaluate(trainer, walk_params, params)
         # Persist fold-level epoch info into Optuna trial user attributes so it
@@ -358,6 +387,7 @@ class OptunaOptimizer:
         return callback
 
     def run(self) -> optuna.Study:
+        torch.set_num_threads(1)
         set_seed()
         optuna.logging.set_verbosity(optuna.logging.INFO)
 
@@ -402,6 +432,7 @@ class OptunaOptimizer:
         logger.info(f"   Scenario      : {self.scenario}")
         logger.info(f"   Model         : {self.model_type.upper()}")
         logger.info(f"   Decomposition : {self.use_decomposition}")
+        logger.info(f"   Log-return    : {self.use_log_return}")
         logger.info(f"   Metric        : {self.val_metric.upper()}")
         logger.info(f"   Trials        : {self.n_trials}")
         logger.info(f"   Parallel jobs : {self.n_jobs}")
@@ -436,12 +467,27 @@ class OptunaOptimizer:
         return study
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Run Optuna Hyperparameter Optimization.")
+    parser.add_argument("--model", type=str, default="tsmixer", choices=["tsmixer", "nbeats", "nhits"], help="Model type to optimize.")
+    parser.add_argument("--scenario", type=int, default=2, choices=[1, 2], help="Scenario number (1 or 2).")
+    parser.add_argument("--n_trials", type=int, default=100, help="Number of trials.")
+    parser.add_argument("--n_jobs", type=int, default=4, help="Number of parallel jobs.")
+    parser.add_argument("--use_decomposition", action="store_true", help="Enable decomposition branch (STL).")
+    parser.add_argument("--use_log_return", action="store_true", help="Enable log-return transformation on target Quantity.")
+    parser.add_argument("--resume", action="store_true", help="Resume previous study if exists.")
+    
+    args = parser.parse_args()
+    
+    val_metric = "mape" if args.scenario == 1 else "tc"
+    
     OptunaOptimizer(
-        scenario=2,
-        n_trials=100,
-        val_metric="tc",
-        n_jobs=4,
-        resume=False,
-        model_type = 'nbeats',
-        use_decomposition=True,
+        scenario=args.scenario,
+        n_trials=args.n_trials,
+        val_metric=val_metric,
+        n_jobs=args.n_jobs,
+        resume=args.resume,
+        model_type=args.model,
+        use_decomposition=args.use_decomposition,
+        use_log_return=args.use_log_return,
     ).run()

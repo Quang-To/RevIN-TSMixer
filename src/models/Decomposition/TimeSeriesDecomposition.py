@@ -10,7 +10,7 @@ class TimeSeriesDecomposition(nn.Module):
         self,
         seq_length: int,
         seasonal_period: int = 4,
-        method: str = "ma",
+        method: str = "stl",
         stl_robust: bool = True,
         stl_seasonal: int = 7,
         stl_trend: int | None = None,
@@ -28,8 +28,16 @@ class TimeSeriesDecomposition(nn.Module):
         self.trend_kernel_size = seasonal_period * 2 - 1
         if self.trend_kernel_size > seq_length:
             self.trend_kernel_size = seq_length
+        self._cache = {}
         
     def forward(self, x: torch.Tensor) -> tuple:
+        if self.method == "stl":
+            # Convert target values to a bytes key for caching
+            target_key = x[:, :, -1].detach().cpu().numpy().tobytes()
+            if target_key in self._cache:
+                trend, seasonal, residual = self._cache[target_key]
+                return trend.to(x.device), seasonal.to(x.device), residual.to(x.device)
+
         batch_size, seq_len, n_features = x.shape
         target = x[:, :, -1]
 
@@ -47,6 +55,9 @@ class TimeSeriesDecomposition(nn.Module):
         seasonal = self._expand_to_features(seasonal_target, x[:, :, :-1], n_features)
         residual = self._expand_to_features(residual_target, x[:, :, :-1], n_features)
         
+        if self.method == "stl":
+            self._cache[target_key] = (trend.detach(), seasonal.detach(), residual.detach())
+            
         return trend, seasonal, residual
     
     def _extract_trend(self, target: torch.Tensor) -> torch.Tensor:
@@ -66,7 +77,6 @@ class TimeSeriesDecomposition(nn.Module):
         seasonal = torch.zeros_like(target)
         residual = torch.zeros_like(target)
 
-        # statsmodels STL requires period >= 2 and enough observations.
         period = max(2, min(int(self.seasonal_period), max(2, seq_length - 1)))
 
         def _odd_or_none(v):
@@ -177,7 +187,7 @@ class AdaptiveDecomposition(nn.Module):
         else:
             self.seasonal_period = initial_period
         
-        self.decomposition = TimeSeriesDecomposition(seq_length, initial_period, method="ma")
+        self.decomposition = TimeSeriesDecomposition(seq_length, initial_period, method="stl")
     
     def forward(self, x: torch.Tensor) -> tuple:
         if self.learnable_period:

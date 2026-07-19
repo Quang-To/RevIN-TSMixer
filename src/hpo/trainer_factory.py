@@ -4,7 +4,7 @@ from src.trainers.RevINMixer import Scenario1Trainer, Scenario2Trainer
 def _decomp_kwargs(params, config, model_type):
     return {
         "use_decomposition": config.get("use_decomposition", False),
-        "decomposition_method": params.get("decomposition_method", config.get("decomposition_method", "ma")),
+        "decomposition_method": params.get("decomposition_method", config.get("decomposition_method", "stl")),
         "seasonal_period": params.get("seasonal_period", config.get("seasonal_period", 4)),
         "stl_robust": params.get("stl_robust", config.get("stl_robust", True)),
         "stl_seasonal": params.get("stl_seasonal", config.get("stl_seasonal", 7)),
@@ -28,7 +28,7 @@ def _seasonality_backbone_kwargs(params):
         "layer_dim": params.get("seasonality_layer_dim", params.get("layer_dim")),
     }
 
-def make_trainer(scenario, params, config, seed=42, trial=None, model_type="tsmixer"):
+def make_trainer(scenario, params, config, seed=42, trial=None, model_type="tsmixer", device=None):
     """
     Create a trainer instance.
     
@@ -68,6 +68,8 @@ def make_trainer(scenario, params, config, seed=42, trial=None, model_type="tsmi
             seed=int(seed),
             trial=trial,
             model_type="tsmixer",
+            use_log_return=config.get("use_log_return", False),
+            device=device,
             **_decomp_kwargs(params, config, model_type),
         )
     elif model_type == "nbeats":
@@ -91,6 +93,8 @@ def make_trainer(scenario, params, config, seed=42, trial=None, model_type="tsmi
             seed=int(seed),
             trial=trial,
             model_type="nbeats",
+            use_log_return=config.get("use_log_return", False),
+            device=device,
             **_decomp_kwargs(params, config, model_type),
         )
     elif model_type == "nhits":
@@ -114,6 +118,8 @@ def make_trainer(scenario, params, config, seed=42, trial=None, model_type="tsmi
             seed=int(seed),
             trial=trial,
             model_type="nhits",
+            use_log_return=config.get("use_log_return", False),
+            device=device,
             **_decomp_kwargs(params, config, model_type),
         )
     else:

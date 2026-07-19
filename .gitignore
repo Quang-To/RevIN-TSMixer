@@ -20,3 +20,5 @@ logs/
 
 # system
 .DS_Store
+
+checkpoints_optuna/*.pt

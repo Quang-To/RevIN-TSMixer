@@ -49,7 +49,7 @@ def sweep_tc(pred: np.ndarray, forecast_errors: np.ndarray, holding_cost: float 
 # ── Prediction collector ──────────────────────────────────────────────────────
 
 @torch.no_grad()
-def collect_predictions(model, loader, device) -> tuple:
+def collect_predictions(model, loader, device, use_log_return: bool = False) -> tuple:
     """
     Run model inference over a DataLoader.
     Returns (pred_array, true_array, errors, idx_array).
@@ -57,13 +57,19 @@ def collect_predictions(model, loader, device) -> tuple:
     """
     model.eval()
     preds, trues, indices = [], [], []
+    base_qties = []
 
     for batch in loader:
         if len(batch) == 3:
-            x, y, idx = batch
-            indices.append(idx.numpy())
+            x, y, meta = batch
+            indices.append(meta[:, 0].numpy())
+            base_qties.append(meta[:, 1].numpy())
         else:
             x, y = batch
+            # Fallback if meta is not present
+            indices.append(np.arange(len(y)))
+            base_qties.append(np.ones(len(y)))
+        
         preds.append(model(x.to(device)).cpu().numpy())
         trues.append(y.numpy())
 
@@ -71,9 +77,24 @@ def collect_predictions(model, loader, device) -> tuple:
         empty = np.array([])
         return empty, empty, empty, empty
 
-    pred_array = np.concatenate(preds).flatten()
-    true_array = np.concatenate(trues).flatten()
-    idx_array  = np.concatenate(indices).flatten() if indices else np.array([])
-    errors     = true_array - pred_array
+    p = np.concatenate(preds)
+    t = np.concatenate(trues)
+    idx_array = np.concatenate(indices).flatten()
+
+    if use_log_return:
+        bq = np.concatenate(base_qties)
+        cumsum_p = np.cumsum(p, axis=1)
+        p_reconstructed = bq[:, np.newaxis] * np.exp(cumsum_p)
+        
+        cumsum_t = np.cumsum(t, axis=1)
+        t_reconstructed = bq[:, np.newaxis] * np.exp(cumsum_t)
+        
+        pred_array = p_reconstructed.flatten()
+        true_array = t_reconstructed.flatten()
+    else:
+        pred_array = p.flatten()
+        true_array = t.flatten()
+
+    errors = true_array - pred_array
 
     return pred_array, true_array, errors, idx_array

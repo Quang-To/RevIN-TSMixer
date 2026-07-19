@@ -6,45 +6,32 @@ Scenario 2 — Model TSMIXER — Rank 2
   Model       : TSMIXER
 
 ── Hyperparameters ─────────────────────────────
-  seq_length  : 12
-  n_block     : 3
+  seq_length  : 6
+  n_block     : 2
   dropout     : 0.5
-  batch_size  : 3
-  ff_dim      : 64
+  batch_size  : 2
+  ff_dim      : 128
   lr          : 0.0001
-  decomposition_method: ma
-  seasonal_period: 4
-  stl_robust  : False
-  stl_seasonal: 9
-  stl_trend   : 9
-  stl_low_pass: 9
-  trend_hidden_dim: 64
-  trend_n_layers: 2
+  seasonal_period: 3
+  stl_seasonal: 5
+  stl_trend   : None
   seasonality_model: tsmixer
-  seasonality_n_stacks: 3
-  seasonality_n_blocks: 2
-  seasonality_n_layers: 3
-  seasonality_hidden_dim: 64
-  seasonality_layer_dim: 256
-  aggregation_method: weighted
-  learnable_aggregation: True
-  hierarchical_decomposition: False
 
 ── Fold best epochs ────────────────────────────
-  epochs      : [1, 1, 1]
-  median      : 1
-  final epochs: 1
+  epochs      : [706, 586, 229]
+  median      : 586
+  final epochs: 586
 
 ── Validation metric (CV mean) ──────────────────
-  TC_min      : 300389.1517
+  TC_min      : 392797.0754
 
 ── CV fold statistics ───────────────────────────
-  fold mean   : 300389.1517
-  fold std    : 36944.9991
-  fold min    : 250411.2093
-  fold max    : 338571.0527
+  fold mean   : 392797.0754
+  fold std    : 2877.9019
+  fold min    : 388730.4238
+  fold max    : 394972.6610
 
 ── Final evaluation ───────────────────────────
-  final_epochs: 1
-  final_Tc_min: 366306.8683
-  final_MAPE  : 37.0812
+  final_epochs: 586
+  final_Tc_min: 415091.7719
+  final_MAPE  : 12.4349

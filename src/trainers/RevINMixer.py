@@ -43,7 +43,7 @@ class BaseTrainer(ABC):
         hidden_dim: Optional[int] = None,
         # Decomposed model parameters
         use_decomposition: bool = False,
-        decomposition_method: str = "ma",
+        decomposition_method: str = "stl",
         seasonal_period: int = 4,
         stl_robust: bool = True,
         stl_seasonal: int = 7,
@@ -55,6 +55,8 @@ class BaseTrainer(ABC):
         aggregation_method: str = "sum",
         learnable_aggregation: bool = False,
         hierarchical_decomposition: bool = False,
+        use_log_return: bool = False,
+        device: Optional[torch.device] = None,
         **kwargs
     ):
         self.seq_length = seq_length
@@ -70,7 +72,7 @@ class BaseTrainer(ABC):
         self.val_metric_type = val_metric_type
         self.seed = int(seed)
         self.trial = trial
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.visualizer = visualizer
         self.model_type = model_type
 
@@ -102,6 +104,7 @@ class BaseTrainer(ABC):
         self.aggregation_method = aggregation_method
         self.learnable_aggregation = learnable_aggregation
         self.hierarchical_decomposition = hierarchical_decomposition
+        self.use_log_return = use_log_return
     OPTUNA_PATIENCE = 50
 
     def crossval_loss_for_optuna(
@@ -207,7 +210,7 @@ class BaseTrainer(ABC):
                 self.visualizer.log_epoch(epoch, train_loss, None)
 
             if verbose and (epoch == 1 or epoch % 50 == 0 or epoch == fixed_epochs):
-                logging.debug(f"  [Train] Epoch {epoch:>4}/{fixed_epochs} | train={train_loss:.4f}")
+                logging.info(f"  [Train] Epoch {epoch:>4}/{fixed_epochs} | train={train_loss:.4f}")
 
         train_errors                       = self._collect_train_errors(model, train_loader)
         test_pred, test_true, test_indices = self._run_inference(model, test_loader)
@@ -391,6 +394,7 @@ class BaseTrainer(ABC):
             split_start=split_start,
             split_end=split_end,
             forecast_horizon=forecast_horizon,
+            use_log_return=self.use_log_return,
         )
         return data.get_loader()
 
@@ -425,6 +429,8 @@ class BaseTrainer(ABC):
                     seasonality_n_stacks=self.n_stacks,
                     seasonality_n_layers=self.n_layers,
                     seasonality_layer_dim=self.layer_dim,
+                    seasonality_ff_dim=self.ff_dim,
+                    seasonality_n_block=self.n_block,
                     dropout=self.dropout,
                     aggregation_method=self.aggregation_method,
                     learnable_aggregation=self.learnable_aggregation
@@ -475,12 +481,12 @@ class BaseTrainer(ABC):
         self, model, loader
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Run model on loader. Returns (pred, true, indices)."""
-        pred, true, _, indices = collect_predictions(model, loader, self.device)
+        pred, true, _, indices = collect_predictions(model, loader, self.device, use_log_return=self.use_log_return)
         return pred, true, indices
 
     def _collect_train_errors(self, model, loader) -> np.ndarray:
         """Compute residuals on training data after final training."""
-        _, true, errors, _ = collect_predictions(model, loader, self.device)
+        _, true, errors, _ = collect_predictions(model, loader, self.device, use_log_return=self.use_log_return)
         return errors
 
     @torch.no_grad()
@@ -625,7 +631,7 @@ class Scenario1Trainer(BaseTrainer):
         model_type: str = "tsmixer",
         # Decomposed model parameters
         use_decomposition: bool = True,
-        decomposition_method: str = "ma",
+        decomposition_method: str = "stl",
         seasonal_period: int = 4,
         stl_robust: bool = True,
         stl_seasonal: int = 7,
@@ -637,6 +643,8 @@ class Scenario1Trainer(BaseTrainer):
         aggregation_method: str = "sum",
         learnable_aggregation: bool = False,
         hierarchical_decomposition: bool = False,
+        use_log_return: bool = False,
+        device: Optional[torch.device] = None,
     ):
         super().__init__(
             seq_length=seq_length,
@@ -675,6 +683,8 @@ class Scenario1Trainer(BaseTrainer):
             aggregation_method=aggregation_method,
             learnable_aggregation=learnable_aggregation,
             hierarchical_decomposition=hierarchical_decomposition,
+            use_log_return=use_log_return,
+            device=device,
         )
 
     @torch.no_grad()
@@ -682,10 +692,10 @@ class Scenario1Trainer(BaseTrainer):
         model.eval()
         if len(loader) == 0:
             return float("inf")
-        return sum(
-            mape_loss(model(x.to(self.device)), y.to(self.device)).item()
-            for x, y, _ in loader
-        ) / len(loader)
+        pred_np, true_np, _, _ = collect_predictions(model, loader, self.device, use_log_return=self.use_log_return)
+        if len(pred_np) == 0:
+            return float("inf")
+        return float(np.mean(np.abs((true_np - pred_np) / (np.abs(true_np) + 1e-8))) * 100)
 
 
 class Scenario2Trainer(BaseTrainer):
@@ -716,7 +726,7 @@ class Scenario2Trainer(BaseTrainer):
         model_type: str = "tsmixer",
         # Decomposed model parameters
         use_decomposition: bool = False,
-        decomposition_method: str = "ma",
+        decomposition_method: str = "stl",
         seasonal_period: int = 4,
         stl_robust: bool = True,
         stl_seasonal: int = 7,
@@ -728,6 +738,8 @@ class Scenario2Trainer(BaseTrainer):
         aggregation_method: str = "sum",
         learnable_aggregation: bool = False,
         hierarchical_decomposition: bool = False,
+        use_log_return: bool = False,
+        device: Optional[torch.device] = None,
     ):
         super().__init__(
             seq_length=seq_length,
@@ -766,21 +778,18 @@ class Scenario2Trainer(BaseTrainer):
             aggregation_method=aggregation_method,
             learnable_aggregation=learnable_aggregation,
             hierarchical_decomposition=hierarchical_decomposition,
+            use_log_return=use_log_return,
+            device=device,
         )
 
     @torch.no_grad()
     def _val_metric(self, model, loader) -> float:
         model.eval()
-        all_preds, all_trues = [], []
-        for x, y, _ in loader:
-            all_preds.append(model(x.to(self.device)).cpu().numpy())
-            all_trues.append(y.numpy())
-        if not all_preds:
+        if len(loader) == 0:
             return float("inf")
-
-        pred_np = np.clip(np.concatenate(all_preds).flatten(), PRED_CLIP_MIN, None)
-        true_np = np.concatenate(all_trues).flatten()
-        errors  = true_np - pred_np
+        pred_np, true_np, errors, _ = collect_predictions(model, loader, self.device, use_log_return=self.use_log_return)
+        if len(pred_np) == 0:
+            return float("inf")
 
         tc_min, _, _ = sweep_tc(
             pred_np,

@@ -31,24 +31,10 @@ SEARCH_SPACE_NHITS: dict[str, list] = {
 SEARCH_SPACE: dict[str, list] = SEARCH_SPACE_TSMIXER
 
 SEARCH_SPACE_DECOMP: dict[str, list] = {
-    "decomposition_method": ["ma", "savgol", "stl"],
     "seasonal_period": [3, 4, 6],
     # STL-specific decomposition hyperparameters.
-    "stl_robust": [False, True],
     "stl_seasonal": [5, 7, 9],
-    "stl_trend": [None, 9, 11],
-    "stl_low_pass": [None, 9, 11],
-    "trend_hidden_dim": [16, 32, 64],
-    "trend_n_layers": [1, 2],
-    "seasonality_model": ["tsmixer", "nbeats", "nhits"],
-    "seasonality_n_stacks": [2, 3],
-    "seasonality_n_blocks": [1, 2, 3],
-    "seasonality_n_layers": [2, 3, 4],
-    "seasonality_hidden_dim": [64, 128, 256],
-    "seasonality_layer_dim": [64, 128, 256],
-    "aggregation_method": ["sum", "weighted"],
-    "learnable_aggregation": [False, True],
-    "hierarchical_decomposition": [False, True],
+    "stl_trend": [7, 9, 11],
 }
 
 DEFAULT_WALK_PARAMS = {

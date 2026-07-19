@@ -31,7 +31,7 @@ class DecomposedForecastModel(nn.Module):
         pred_len: int,
         n_features: int = 1,
         seasonal_period: int = 4,
-        decomposition_method: str = "ma",
+        decomposition_method: str = "stl",
         # STL-specific decomposition parameters
         stl_robust: bool = True,
         stl_seasonal: int = 7,
@@ -47,6 +47,8 @@ class DecomposedForecastModel(nn.Module):
         seasonality_n_stacks: int = 2,
         seasonality_n_layers: int = 2,
         seasonality_layer_dim: int = 64,
+        seasonality_ff_dim: int = 64,
+        seasonality_n_block: int = 2,
         # Common
         dropout: float = 0.1,
         aggregation_method: str = "sum",
@@ -114,6 +116,8 @@ class DecomposedForecastModel(nn.Module):
             n_stacks=seasonality_n_stacks,
             n_layers=seasonality_n_layers,
             layer_dim=seasonality_layer_dim,
+            ff_dim=seasonality_ff_dim,
+            n_block=seasonality_n_block,
             dropout=dropout
         )
         

@@ -52,7 +52,7 @@ def config_dict_from_obj(obj):
         "val_metric": obj.val_metric,
         "seed": int(obj.seed),
         "use_decomposition": bool(getattr(obj, "use_decomposition", False)),
-        "decomposition_method": getattr(obj, "decomposition_method", "ma"),
+        "decomposition_method": getattr(obj, "decomposition_method", "stl"),
         "seasonal_period": int(getattr(obj, "seasonal_period", 4)),
         "stl_robust": bool(getattr(obj, "stl_robust", True)),
         "stl_seasonal": int(getattr(obj, "stl_seasonal", 7)),
@@ -64,4 +64,5 @@ def config_dict_from_obj(obj):
         "aggregation_method": getattr(obj, "aggregation_method", "sum"),
         "learnable_aggregation": bool(getattr(obj, "learnable_aggregation", False)),
         "hierarchical_decomposition": bool(getattr(obj, "hierarchical_decomposition", False)),
+        "use_log_return": bool(getattr(obj, "use_log_return", False)),
     }
