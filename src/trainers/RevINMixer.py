@@ -14,6 +14,15 @@ from src.models.NHITSModel.NHITSModel import NHITSModel
 from src.models.Decomposition.DecomposedForecastModel import DecomposedForecastModel, HierarchicalDecomposedModel
 from src.data.dataset import TimeSeriesData
 from src.data.walk_forward import WalkForwardSplitter
+from src.data.preprocessing import Preprocessing
+from src.utils.decomposition_helpers import (
+    custom_stl_decompose,
+    custom_decomposed_forecast_forward,
+    custom_decomposed_forecast_get_component_forecasts,
+    decompose_stl,
+    extend_decomposition,
+    get_or_compute_decomposition
+)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -105,6 +114,12 @@ class BaseTrainer(ABC):
         self.learnable_aggregation = learnable_aggregation
         self.hierarchical_decomposition = hierarchical_decomposition
         self.use_log_return = use_log_return
+        
+        # Pre-decomposed arrays for leak-free forecasting
+        self.y_full = Preprocessing().preprocess()["Quantity"].values
+        self.trend_total = None
+        self.seasonal_total = None
+        self.resid_total = None
     OPTUNA_PATIENCE = 50
 
     def crossval_loss_for_optuna(
@@ -387,6 +402,17 @@ class BaseTrainer(ABC):
         batch_size: Optional[int] = None,
         forecast_horizon: int = DEFAULT_FORECAST_HORIZON,
     ):
+        if self.use_decomposition and self.decomposition_method == "stl" and split_start == 0:
+            t_end = split_end
+            period = self.seasonal_period if self.seasonal_period is not None else 4
+            seasonal = self.stl_seasonal if self.stl_seasonal is not None else 7
+            trend = self.stl_trend if self.stl_trend is not None else 41
+            
+            # Fetch pre-computed or cached decomposition
+            self.trend_total, self.seasonal_total, self.resid_total = get_or_compute_decomposition(
+                self.y_full, t_end, period, seasonal, trend
+            )
+
         data = TimeSeriesData(
             seq_length=self.seq_length,
             batch_size=batch_size or self.batch_size,
@@ -399,6 +425,22 @@ class BaseTrainer(ABC):
         return data.get_loader()
 
     def _build_model(self):
+        model = self._build_model_raw()
+        if self.use_decomposition and self.decomposition_method == "stl" and hasattr(model, "decomposition"):
+            import types
+            model.decomposition.y_full = self.y_full
+            model.decomposition.trend_total = self.trend_total
+            model.decomposition.seasonal_total = self.seasonal_total
+            model.decomposition.resid_total = self.resid_total
+            model.decomposition.forecast_horizon = getattr(self, "forecast_horizon", 4)
+            
+            # Bind the custom methods
+            model.decomposition._stl_decompose = types.MethodType(custom_stl_decompose, model.decomposition)
+            model.forward = types.MethodType(custom_decomposed_forecast_forward, model)
+            model.get_component_forecasts = types.MethodType(custom_decomposed_forecast_get_component_forecasts, model)
+        return model
+
+    def _build_model_raw(self):
         # Decomposed models
         if self.use_decomposition:
             if self.hierarchical_decomposition:

@@ -30,12 +30,7 @@ SEARCH_SPACE_NHITS: dict[str, list] = {
 
 SEARCH_SPACE: dict[str, list] = SEARCH_SPACE_TSMIXER
 
-SEARCH_SPACE_DECOMP: dict[str, list] = {
-    "seasonal_period": [3, 4, 6],
-    # STL-specific decomposition hyperparameters.
-    "stl_seasonal": [5, 7, 9],
-    "stl_trend": [7, 9, 11],
-}
+SEARCH_SPACE_DECOMP: dict[str, list] = {}
 
 DEFAULT_WALK_PARAMS = {
     "train_ratio": 0.6,
