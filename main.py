@@ -1,4 +1,4 @@
-# main.py
+# main.py — Entry point: load HPO checkpoint rồi train + evaluate
 
 import logging
 import warnings
@@ -7,125 +7,98 @@ import numpy as np
 import config
 from src.checkpoints import load_best_checkpoint_or_summary
 from src.models.factory import build_trainer
-from src.trainers.RevINMixer import Scenario1Trainer, Scenario2Trainer
+from src.trainers import Scenario1Trainer, Scenario2Trainer
 from src.utils.visualization import TrainingVisualizer
 from src.utils.reporting import print_run_summary
 
 
 def main():
-    # Suppress UserWarnings (including matplotlib warnings) and configure logging
     warnings.filterwarnings("ignore", category=UserWarning)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
+    # ── Bước 1: Load bộ siêu tham số tốt nhất từ Optuna HPO ───────────────────
     ckpt = load_best_checkpoint_or_summary(config.SCENARIO, config.MODEL, ranks=(1, 2, 3))
     best_params = ckpt.get("params", {}).copy()
-    best_params["use_decomposition"] = (
-        any(k in best_params for k in config.DECOMP_DEFAULTS) or bool(best_params.get("use_decomposition", False))
-    )
-    best_params["use_log_return"] = best_params.get("use_log_return", config.USE_LOG_RETURN)
-    if config.FORCE_NO_DECOMPOSITION:
-        best_params["use_decomposition"] = False
-
-    median_best_epoch = ckpt.get("cv_median_best_epoch") or ckpt.get("median_best_epoch") or ckpt.get("best_epoch")
-    fold_best_epochs = ckpt.get("fold_best_epochs", [])
-    val_metric = ckpt.get("val_metric")
-
-    for k in ("val_metric", "val_metric_type"):
+    best_params.setdefault("use_log_return", config.USE_LOG_RETURN)
+    for k in ("val_metric", "val_metric_type", "use_decomposition",
+              "decomposition_method", "seasonal_period"):
         best_params.pop(k, None)
 
-    # Resolve decomposition parameters
-    from src.checkpoints.parsing import _get
-    decomp_params = {
-        k: _get(best_params, ckpt.get("decomp_params", {}), k, default)
-        for k, default in config.DECOMP_DEFAULTS.items()
-    }
-    
-    logging.info(f"Loaded checkpoint: rank={ckpt.get('rank')} model={ckpt.get('model_type', config.MODEL).upper()}")
-    logging.info(f"Decomposition: {decomp_params['decomposition_method'].upper()}")
-    logging.info(f"seasonal_period={decomp_params['seasonal_period']}")
-    if decomp_params['decomposition_method'].lower() == "stl":
-        logging.info(f"stl_seasonal={decomp_params['stl_seasonal']}")
-        logging.info(f"stl_trend={decomp_params['stl_trend']}")
-
-    # Print model parameters
-    model_keys = {
-        "tsmixer": ["seq_length", "n_block", "dropout", "batch_size", "ff_dim", "lr"],
-        "nbeats": ["seq_length", "n_stacks", "n_layers", "layer_dim", "dropout", "batch_size", "lr"],
-        "nhits": ["seq_length", "n_stacks", "n_blocks", "n_layers", "hidden_dim", "dropout", "batch_size", "lr"],
-    }.get(config.MODEL.lower(), [])
-    params_str = ", ".join(
-        f"{k}={best_params.get(k, ckpt.get('params', {}).get(k))}"
-        for k in model_keys
-        if best_params.get(k) is not None or ckpt.get('params', {}).get(k) is not None
-    )
-    logging.info(f"Parameters: {params_str}")
-
-    fixed_epochs = median_best_epoch
-    if fixed_epochs is None and fold_best_epochs:
-        fixed_epochs = int(round(float(np.median(fold_best_epochs))))
-        logging.debug(f"Fixed final epochs: {fixed_epochs}")
+    logging.info(f"[Bước 1] Load Best HPO Params: rank={ckpt.get('rank')} | model={config.MODEL.upper()} | val_loss={ckpt.get('val_metric')}")
+    logging.info(f"Params: { {k: best_params.get(k) for k in ['seq_length','batch_size','lr','dropout']} }")
+    logging.info(f"Inventory: holding={config.HOLDING_COST}, shortage={config.SHORTAGE_COST}")
+    logging.info(f"CR = {config.SHORTAGE_COST / (config.SHORTAGE_COST + config.HOLDING_COST):.4f}")
 
     TrainerClass = Scenario1Trainer if config.SCENARIO == 1 else Scenario2Trainer
     trainer = build_trainer(
-        config.MODEL,
-        best_params,
-        decomp_params,
-        TrainerClass,
-        TrainingVisualizer(save_dir="results"),
-        ckpt_decomp_params=ckpt.get("decomp_params", {})
+        model_name   = config.MODEL,
+        best_params  = best_params,
+        TrainerClass = TrainerClass,
+        visualizer   = TrainingVisualizer(save_dir="results"),
     )
 
-    walk_params = dict(
-        seq_length=best_params.get("seq_length", config.SEQ_LENGTH),
-        pred_length=best_params.get("pred_length", best_params.get("pred_len", config.PRED_LEN)),
-        forecast_horizon=best_params.get("forecast_horizon", config.FORECAST_HORIZON),
-        train_ratio=best_params.get("train_ratio", 0.6),
-        val_size=best_params.get("val_size", 21),
-        test_size=best_params.get("test_size", 21),
-        step=best_params.get("step", 3),
+    n = trainer.data_dict["n"]
+    train_end = trainer.data_dict["train_end"]
+    val_end = trainer.data_dict["val_end"]
+    val_size = val_end - train_end
+    test_size = n - val_end
+
+    split_params = dict(
+        seq_length       = best_params.get("seq_length",  config.SEQ_LENGTH),
+        pred_length      = best_params.get("pred_length", config.PRED_LEN),
+        forecast_horizon = config.FORECAST_HORIZON,
+        train_size       = train_end,
+        val_size         = val_size,
+        test_size        = test_size,
+    )
+    logging.info(f"[Bước 2] Huấn luyện mô hình với Early Stopping trên tập Validation [{train_end}:{val_end}]...")
+    run_result = trainer.train_with_early_stopping_and_test(
+        split_params,
+        batch_size = best_params.get("batch_size", config.BATCH_SIZE),
+        verbose    = True,
+        max_epochs = trainer.epochs,
+        patience   = trainer.patience,
     )
 
-    run_result = trainer.train_and_test_with_best_hparams(
-        walk_params,
-        batch_size=best_params.get("batch_size", config.BATCH_SIZE),
-        verbose=True,
-        n_epochs=trainer.epochs,
-        patience=trainer.patience,
-        fold_best_epochs=fold_best_epochs,
-        fixed_epochs=fixed_epochs,
-    )
-
-    result = {
-        "preds": run_result["test_pred"],
-        "trues": run_result["test_true"],
-        "indices": run_result.get("test_indices", []),
-        "decomp_components": run_result.get("decomp_components"),
-        "metrics": run_result["metrics"],
-        "best_epoch": run_result.get("best_epoch"),
-        "median_best_epoch": median_best_epoch,
-        "fold_best_epochs": fold_best_epochs,
-        "val_metric": val_metric,
-        "rank": ckpt.get("rank"),
-        "scenario": ckpt.get("scenario"),
-        "model": ckpt.get("model_type"),
+    logging.info(f"[Bước 3] Tải checkpoint tốt nhất tại epoch {run_result['best_epoch']} và đánh giá trên tập Test [{val_end}:{n}].")
+    metrics = run_result["metrics"]
+    result  = {
+        "preds":             run_result["test_pred"],
+        "trues":             run_result["test_true"],
+        "indices":           run_result.get("test_indices", []),
+        "quantiles":         run_result.get("test_quantiles"),
+        "metrics":           metrics,
+        "best_epoch":        run_result.get("best_epoch"),
+        "median_best_epoch": run_result.get("best_epoch"),
+        "mean_best_epoch":   run_result.get("best_epoch"),
+        "fold_best_epochs":  [run_result.get("best_epoch")],
+        "val_metric":        ckpt.get("val_metric"),
+        "rank":              ckpt.get("rank"),
+        "scenario":          config.SCENARIO,
+        "model":             config.MODEL,
     }
 
-    # Print run summary
+    # In kết quả tổng hợp
     print_run_summary(result, config.SCENARIO, best_params.get("seq_length", config.SEQ_LENGTH))
 
-    # Plot visualizer
+
+
+    # ── Bước 6: Vẽ biểu đồ ───────────────────────────────────────────────────
     viz = trainer.visualizer
     viz.plot_training_history(scenario=config.SCENARIO)
     viz.plot_predictions_vs_actual(result["preds"], result["trues"], scenario=config.SCENARIO)
-    viz.plot_test_metrics(result["metrics"], scenario=config.SCENARIO)
+    viz.plot_test_metrics(metrics, scenario=config.SCENARIO)
     viz.plot_comparison_with_baseline(result["preds"], result["trues"], scenario=config.SCENARIO)
-    if result.get("decomp_components") is not None:
-        viz.plot_decomposition_diagnostics(result["decomp_components"], result["trues"], scenario=config.SCENARIO)
-        viz.plot_time_series_decomposition(
-            result["decomp_components"],
-            scenario=config.SCENARIO,
-            seq_length=best_params.get("seq_length", config.SEQ_LENGTH)
-        )
+    viz.plot_fan_chart(result["quantiles"], result["trues"], result["indices"], scenario=config.SCENARIO)
+    viz.plot_calibration_curve(result["quantiles"], result["trues"], scenario=config.SCENARIO)
+    viz.plot_expected_cost_curve(
+        result["quantiles"], result["trues"],
+        holding_cost=config.HOLDING_COST,
+        shortage_cost=config.SHORTAGE_COST,
+        scenario=config.SCENARIO,
+    )
+    viz.plot_eda()
+    viz.update_model_comparison(config.MODEL, metrics, scenario=config.SCENARIO)
 
 
 if __name__ == "__main__":

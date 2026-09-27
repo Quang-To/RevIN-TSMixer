@@ -10,13 +10,8 @@ if __name__ == "__main__":
     step = 3
 
     splitter = WalkForwardSplitter(
-        seq_length=seq_length,
-        pred_length=pred_length,
-        forecast_horizon=forecast_horizon,
-        train_ratio=train_ratio,
-        val_size=val_size,
-        test_size=test_size,
-        step=step
+        seq_length=seq_length, pred_length=pred_length, forecast_horizon=forecast_horizon,
+        train_ratio=train_ratio, val_size=val_size, test_size=test_size, step=step
     )
 
     splitter.summary()

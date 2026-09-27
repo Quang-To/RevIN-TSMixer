@@ -2,37 +2,30 @@ Scenario 2 — Model NBEATS — Rank 3
 ==================================================
 
 ── Loss Configuration ──────────────────────────
-  Val Metric  : TC
+  Val Metric  : PINBALL
   Model       : NBEATS
 
 ── Hyperparameters ─────────────────────────────
-  seq_length  : 11
-  n_stacks    : 3
-  n_layers    : 3
-  layer_dim   : 256
-  dropout     : 0.1
-  batch_size  : 2
-  lr          : 0.0001
-  seasonal_period: 4
-  stl_seasonal: 7
-  stl_trend   : None
-  seasonality_model: nbeats
+  seq_length  : 24
+  n_stacks    : 1
+  n_blocks    : 4
+  n_layers    : 2
+  layer_dim   : 320
+  dropout     : 0.15445744837706815
+  batch_size  : 8
+  lr          : 0.000629681158804188
 
 ── Fold best epochs ────────────────────────────
-  epochs      : [236, 136, 76]
-  median      : 136
-  final epochs: 136
+  epochs      : [220]
+  median      : 220
+  mean        : 220.0
+  final epochs: 220
 
 ── Validation metric (CV mean) ──────────────────
-  TC_min      : 267860.9505
+  Pinball Loss: 1078.4714
 
 ── CV fold statistics ───────────────────────────
-  fold mean   : 267860.9505
-  fold std    : 7016.7892
-  fold min    : 257942.2881
-  fold max    : 273081.2380
-
-── Final evaluation ───────────────────────────
-  final_epochs: 136
-  final_Tc_min: 290801.5354
-  final_MAPE  : 2.2320
+  fold mean   : 0.0000
+  fold std    : 0.0000
+  fold min    : 0.0000
+  fold max    : 0.0000

@@ -1,126 +1,68 @@
-from src.trainers.RevINMixer import Scenario1Trainer, Scenario2Trainer
+from src.trainers import Scenario1Trainer, Scenario2Trainer
 
 
-def _decomp_kwargs(params, config, model_type):
-    return {
-        "use_decomposition": config.get("use_decomposition", False),
-        "decomposition_method": params.get("decomposition_method", config.get("decomposition_method", "stl")),
-        "seasonal_period": params.get("seasonal_period", config.get("seasonal_period", 4)),
-        "stl_robust": params.get("stl_robust", config.get("stl_robust", True)),
-        "stl_seasonal": params.get("stl_seasonal", config.get("stl_seasonal", 7)),
-        "stl_trend": params.get("stl_trend", config.get("stl_trend", None)),
-        "stl_low_pass": params.get("stl_low_pass", config.get("stl_low_pass", None)),
-        "trend_hidden_dim": params.get("trend_hidden_dim", config.get("trend_hidden_dim", 32)),
-        "trend_n_layers": params.get("trend_n_layers", config.get("trend_n_layers", 1)),
-        "seasonality_model": params.get("seasonality_model", config.get("seasonality_model", model_type)),
-        "aggregation_method": params.get("aggregation_method", config.get("aggregation_method", "sum")),
-        "learnable_aggregation": params.get("learnable_aggregation", config.get("learnable_aggregation", False)),
-        "hierarchical_decomposition": params.get("hierarchical_decomposition", config.get("hierarchical_decomposition", False)),
-    }
+def make_trainer(scenario: int, params: dict, config: dict,
+                 seed: int = 42, trial=None,
+                 model_type: str = "tsmixer", device=None):
 
+    TrainerClass = {1: Scenario1Trainer, 2: Scenario2Trainer}[scenario]
 
-def _seasonality_backbone_kwargs(params):
-    return {
-        "n_stacks": params.get("seasonality_n_stacks", params.get("n_stacks")),
-        "n_blocks": params.get("seasonality_n_blocks", params.get("n_blocks")),
-        "n_layers": params.get("seasonality_n_layers", params.get("n_layers")),
-        "hidden_dim": params.get("seasonality_hidden_dim", params.get("hidden_dim")),
-        "layer_dim": params.get("seasonality_layer_dim", params.get("layer_dim")),
-    }
+    lr = params.get("lr", params.get("learning_rate", 1e-3))
+    seq_length = params.get("seq_length", params.get("lookback", 24))
+    hidden = params.get("hidden_size", params.get("ff_dim", params.get("layer_dim", params.get("hidden_dim", 256))))
+    n_layers = params.get("n_layers", params.get("n_block", 3))
+    dropout = params.get("dropout", 0.1)
+    revin_affine = params.get("revin_affine", True)
 
-def make_trainer(scenario, params, config, seed=42, trial=None, model_type="tsmixer", device=None):
-    """
-    Create a trainer instance.
-    
-    Args:
-        scenario: 1 or 2
-        params: Hyperparameter dict
-        config: Config dict
-        seed: Random seed
-        trial: Optuna trial object
-        model_type: "tsmixer", "nbeats", or "nhits"
-    """
-    TrainerClass = {
-        1: Scenario1Trainer,
-        2: Scenario2Trainer
-    }[scenario]
+    common = dict(
+        pred_len      = config.get("pred_len", 1),
+        batch_size    = params.get("batch_size", 16),
+        lr            = lr,
+        epochs        = config.get("epochs", 300),
+        patience      = config.get("patience", 30),
+        holding_cost  = config.get("holding_cost", 4.0),
+        shortage_cost = config.get("shortage_cost", 30.0),
+        lead_time     = config.get("lead_time", 1),
+        ordering_cost = config.get("ordering_cost", 50000.0),
+        seed          = int(seed),
+        trial         = trial,
+        model_type    = model_type,
+        use_log_return= config.get("use_log_return", False),
+        data_file     = config.get("data_file", None),
+        revin_affine  = revin_affine,
+        device        = device,
+    )
 
     if model_type == "tsmixer":
-        seasonality_kwargs = _seasonality_backbone_kwargs(params)
         return TrainerClass(
-            seq_length=params["seq_length"],
-            ff_dim=params["ff_dim"],
-            dropout=params["dropout"],
-            pred_len=config["pred_len"],
-            n_block=params["n_block"],
-            n_stacks=seasonality_kwargs["n_stacks"],
-            n_blocks=seasonality_kwargs["n_blocks"],
-            n_layers=seasonality_kwargs["n_layers"],
-            hidden_dim=seasonality_kwargs["hidden_dim"],
-            layer_dim=seasonality_kwargs["layer_dim"],
-            batch_size=params["batch_size"],
-            lr=params["lr"],
-            epochs=config["epochs"],
-            patience=config["patience"],
-            holding_cost=config["holding_cost"],
-            lead_time=config["lead_time"],
-            ordering_cost=config["ordering_cost"],
-            seed=int(seed),
-            trial=trial,
-            model_type="tsmixer",
-            use_log_return=config.get("use_log_return", False),
-            device=device,
-            **_decomp_kwargs(params, config, model_type),
+            seq_length = seq_length,
+            ff_dim     = hidden,
+            n_block    = n_layers,
+            dropout    = dropout,
+            **common,
         )
+
     elif model_type == "nbeats":
-        seasonality_kwargs = _seasonality_backbone_kwargs(params)
         return TrainerClass(
-            seq_length=params["seq_length"],
-            n_stacks=params["n_stacks"],
-            n_layers=params["n_layers"],
-            layer_dim=params["layer_dim"],
-            dropout=params["dropout"],
-            n_blocks=seasonality_kwargs["n_blocks"],
-            hidden_dim=seasonality_kwargs["hidden_dim"],
-            pred_len=config["pred_len"],
-            batch_size=params["batch_size"],
-            lr=params["lr"],
-            epochs=config["epochs"],
-            patience=config["patience"],
-            holding_cost=config["holding_cost"],
-            lead_time=config["lead_time"],
-            ordering_cost=config["ordering_cost"],
-            seed=int(seed),
-            trial=trial,
-            model_type="nbeats",
-            use_log_return=config.get("use_log_return", False),
-            device=device,
-            **_decomp_kwargs(params, config, model_type),
+            seq_length = seq_length,
+            n_stacks   = params.get("n_stacks", 2),
+            n_blocks   = params.get("n_blocks", 2),
+            n_layers   = n_layers,
+            layer_dim  = hidden,
+            dropout    = dropout,
+            **common,
         )
+
     elif model_type == "nhits":
-        seasonality_kwargs = _seasonality_backbone_kwargs(params)
         return TrainerClass(
-            seq_length=params["seq_length"],
-            n_stacks=params["n_stacks"],
-            n_blocks=params["n_blocks"],
-            n_layers=params["n_layers"],
-            hidden_dim=params["hidden_dim"],
-            dropout=params["dropout"],
-            layer_dim=seasonality_kwargs["layer_dim"],
-            pred_len=config["pred_len"],
-            batch_size=params["batch_size"],
-            lr=params["lr"],
-            epochs=config["epochs"],
-            patience=config["patience"],
-            holding_cost=config["holding_cost"],
-            lead_time=config["lead_time"],
-            ordering_cost=config["ordering_cost"],
-            seed=int(seed),
-            trial=trial,
-            model_type="nhits",
-            use_log_return=config.get("use_log_return", False),
-            device=device,
-            **_decomp_kwargs(params, config, model_type),
+            seq_length = seq_length,
+            n_stacks   = params.get("n_stacks", 2),
+            n_blocks   = params.get("n_blocks", 2),
+            n_layers   = n_layers,
+            hidden_dim = hidden,
+            dropout    = dropout,
+            **common,
         )
+
     else:
-        raise ValueError(f"Unknown model_type: {model_type}")
+        raise ValueError(f"Unknown model_type: {model_type!r}")

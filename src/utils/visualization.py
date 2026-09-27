@@ -43,7 +43,7 @@ class TrainingVisualizer:
         axes[0].legend()
         
         # Plot 2: Validation Metric
-        metric_name = 'TC_min (đồng)' if scenario == 2 else 'MAPE (%)'
+        metric_name = 'TC_min (cost units)' if scenario == 2 else 'MAPE (%)'
         axes[1].plot(self.epochs, self.val_metrics, 'o-', linewidth=2, 
                      markersize=6, color='#A23B72', label='Validation Metric')
         axes[1].set_xlabel('Epoch', fontsize=11, fontweight='bold')
@@ -57,6 +57,146 @@ class TrainingVisualizer:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         logging.info(f"[OK] Saved: {save_path}")
         plt.close()
+
+    def plot_fan_chart(self, quantiles, true, indices=None, scenario: int = 1):
+        """Plot test forecasts with central 50%, 80%, and 90% intervals."""
+        q = np.asarray(quantiles, dtype=float)
+        y = np.asarray(true, dtype=float).reshape(-1)
+        if q.ndim != 2 or len(q) == 0:
+            logging.warning("No quantile forecasts available for fan chart")
+            return
+        n = min(len(y), len(q))
+        q, y = q[:n], y[:n]
+        x = np.arange(n)
+        fig, ax = plt.subplots(figsize=(14, 6))
+        ax.fill_between(x, q[:, 0], q[:, 6], color="#4C78A8", alpha=.16, label="P5-P95 (90%)")
+        ax.fill_between(x, q[:, 1], q[:, 5], color="#4C78A8", alpha=.24, label="P10-P90 (80%)")
+        ax.fill_between(x, q[:, 2], q[:, 4], color="#4C78A8", alpha=.38, label="P25-P75 (50%)")
+        ax.plot(x, q[:, 3], color="#E45756", linewidth=2, label="P50")
+        ax.plot(x, y, color="black", marker="o", linewidth=1.8, label="Actual")
+        ax.set(title="Quantile Forecast Fan Chart", xlabel="Test month", ylabel="Quantity")
+        ax.legend(ncol=3)
+        fig.tight_layout()
+        path = self.save_dir / f"scenario_{scenario}_fan_chart.png"
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        logging.info(f"[OK] Saved: {path}")
+
+    def plot_calibration_curve(self, quantiles, true, scenario: int = 1):
+        q = np.asarray(quantiles, dtype=float)
+        y = np.asarray(true, dtype=float).reshape(-1)
+        if q.ndim != 2 or len(q) == 0:
+            return
+        levels = np.array([.05, .10, .25, .50, .75, .90, .95])
+        n = min(len(y), len(q))
+        empirical = np.array([np.mean(y[:n] <= q[:n, i]) for i in range(len(levels))])
+        fig, ax = plt.subplots(figsize=(7, 7))
+        ax.plot([0, 1], [0, 1], "k--", label="Ideal calibration")
+        ax.plot(levels, empirical, "o-", color="#E45756", linewidth=2, label="Empirical")
+        ax.set(xlim=(0, 1), ylim=(0, 1), xlabel="Nominal quantile", ylabel="Empirical coverage",
+               title="Quantile Calibration Curve")
+        ax.legend()
+        fig.tight_layout()
+        path = self.save_dir / f"scenario_{scenario}_calibration_curve.png"
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        logging.info(f"[OK] Saved: {path}")
+
+    def plot_expected_cost_curve(self, quantiles, true, holding_cost: float,
+                                 shortage_cost: float, scenario: int = 1):
+        q = np.asarray(quantiles, dtype=float)
+        d = np.asarray(true, dtype=float).reshape(-1)
+        if q.ndim != 2 or len(q) == 0:
+            return
+        levels = np.array([.05, .10, .25, .50, .75, .90, .95])
+        cr = shortage_cost / (shortage_cost + holding_cost)
+        y_star = np.mean([np.interp(cr, levels, row) for row in q])
+        lo, hi = min(d.min(), q.min()), max(d.max(), q.max())
+        stock = np.linspace(max(0, lo * .8), hi * 1.1, 250)
+        costs = np.array([
+            holding_cost * np.mean(np.maximum(level - d, 0))
+            + shortage_cost * np.mean(np.maximum(d - level, 0))
+            for level in stock
+        ])
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(stock, costs, color="#4C78A8", linewidth=2)
+        ax.axvline(y_star, color="#E45756", linestyle="--", label=f"CR={cr:.2f}, y*={y_star:,.0f}")
+        ax.scatter([stock[np.argmin(costs)]], [costs.min()], color="black", zorder=3, label="Empirical minimum")
+        ax.set(title="Expected Overage/Underage Cost Curve", xlabel="Prepared quantity y", ylabel="Expected variable cost")
+        ax.legend()
+        fig.tight_layout()
+        path = self.save_dir / f"scenario_{scenario}_expected_cost_curve.png"
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        logging.info(f"[OK] Saved: {path}")
+
+    def plot_eda(self):
+        """Create STL decomposition and annual exogenous distribution-shift charts."""
+        import pandas as pd
+        from statsmodels.tsa.seasonal import STL
+        from src.data.data_loader import data_loader
+
+        df = data_loader().copy()
+        df["Month"] = pd.to_datetime(df["Month"])
+        df = df.sort_values("Month")
+        stl = STL(df["Quantity"].astype(float), period=12, robust=True).fit()
+        fig, axes = plt.subplots(4, 1, figsize=(14, 10), sharex=True)
+        for ax, values, label in zip(
+            axes, [df["Quantity"], stl.trend, stl.seasonal, stl.resid],
+            ["Observed", "Trend", "Seasonality", "Residual"],
+        ):
+            ax.plot(df["Month"], values, linewidth=1.5)
+            ax.set_ylabel(label)
+        axes[0].set_title("STL Decomposition of Quantity")
+        fig.tight_layout()
+        path = self.save_dir / "eda_stl_decomposition.png"
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+
+        df["Year"] = df["Month"].dt.year
+        features = ["PromotionAmount", "CompetitorQuantity", "Imports", "IPI"]
+        fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+        for ax, feature in zip(axes.ravel(), features):
+            annual = df.groupby("Year")[feature].mean()
+            normalized = (annual - annual.mean()) / (annual.std() + 1e-8)
+            ax.plot(normalized.index, normalized.values, "o-", linewidth=2)
+            ax.set_title(f"Annual mean shift: {feature}")
+            ax.set_ylabel("Standardized annual mean")
+        fig.tight_layout()
+        path = self.save_dir / "eda_distribution_shift.png"
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        logging.info("[OK] Saved EDA charts")
+
+    def update_model_comparison(self, model_name: str, metrics: Dict[str, float], scenario: int = 1):
+        """Persist the latest model result and plot TC/fill-rate comparisons."""
+        import pandas as pd
+        csv_path = self.save_dir / f"scenario_{scenario}_model_metrics.csv"
+        row = pd.DataFrame([{
+            "model": model_name.upper(),
+            "Total_Cost": metrics.get("Total_Cost", metrics.get("TC_min", np.nan)),
+            "Fill_Rate": metrics.get("fill_rate", np.nan),
+            "MAPE": metrics.get("MAPE", np.nan),
+        }])
+        if csv_path.exists():
+            old = pd.read_csv(csv_path)
+            old = old[old["model"] != model_name.upper()]
+            row = pd.concat([old, row], ignore_index=True)
+        row.to_csv(csv_path, index=False)
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        axes[0].bar(row["model"], row["Total_Cost"], color="#4C78A8")
+        axes[0].set_title("Total Cost by Model")
+        axes[0].set_ylabel("Total Cost (cost units)")
+        axes[1].bar(row["model"], row["Fill_Rate"] * 100, color="#59A14F")
+        axes[1].set_title("Fill Rate by Model")
+        axes[1].set_ylabel("Fill Rate (%)")
+        axes[1].set_ylim(0, 100)
+        fig.tight_layout()
+        path = self.save_dir / f"scenario_{scenario}_inventory_model_comparison.png"
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        logging.info(f"[OK] Saved: {path}")
     
     def plot_predictions_vs_actual(self, pred: np.ndarray, true: np.ndarray, 
                                    scenario: int = 1):
@@ -143,7 +283,7 @@ class TrainingVisualizer:
         ax.grid(True, alpha=0.3, axis='y')
         
         # Add custom y-axis labels for each metric
-        metric_labels = ['MAE (units)', 'RMSE (units)', 'MAPE (%)', 'TC_min (đồng)']
+        metric_labels = ['MAE (units)', 'RMSE (units)', 'MAPE (%)', 'TC_min (cost units)']
         ax.set_xticklabels([metric_labels[i] for i in range(len(metric_values))], fontsize=11)
         
         plt.tight_layout()

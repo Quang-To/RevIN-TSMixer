@@ -1,7 +1,6 @@
 import sys
 from pathlib import Path
 
-# Add project root to sys.path to support direct execution
 project_root = str(Path(__file__).resolve().parents[2])
 if project_root not in sys.path:
     sys.path.append(project_root)
@@ -22,16 +21,17 @@ logging.basicConfig(level=logging.INFO)
 class OptunaOptimizer:
     def __init__(
         self,
-        scenario: int,
-        val_metric: str,
+        scenario: int = 2,
+        val_metric: str = "pinball",
         n_trials: int = 50,
         save_dir: str = "checkpoints_optuna",
-        pred_len: int = 3,
-        epochs: int = 3000,
-        patience: int = 100,
-        holding_cost: float = 2.0,
-        lead_time: int = 2,
-        forecast_horizon: int = 4,
+        pred_len: int = 1,
+        epochs: int = 300,
+        patience: int = 30,
+        holding_cost: float = 4.0,
+        shortage_cost: float = 30.0,
+        lead_time: int = 1,
+        forecast_horizon: int = 1,
         ordering_cost: float = 50_000,
         n_jobs: int = 1,
         resume: bool = False,
@@ -51,6 +51,7 @@ class OptunaOptimizer:
         learnable_aggregation: bool = False,
         hierarchical_decomposition: bool = False,
         use_log_return: bool = False,
+        data_file: str | None = None,
     ):
         assert scenario in (1, 2), "scenario must be 1 or 2"
         assert model_type in VALID_MODELS, f"model_type must be one of {VALID_MODELS}, got '{model_type}'"
@@ -62,12 +63,14 @@ class OptunaOptimizer:
         self.epochs          = epochs
         self.patience        = patience
         self.holding_cost    = holding_cost
+        self.shortage_cost   = shortage_cost
         self.lead_time       = lead_time
         self.ordering_cost   = ordering_cost
         self.forecast_horizon = forecast_horizon
+        self.data_file       = data_file
         if val_metric and val_metric not in VALID_METRICS:
             raise ValueError(f"val_metric must be one of {VALID_METRICS}, got '{val_metric}'")
-        self.val_metric = val_metric or ("tc" if scenario == 2 else "mape")
+        self.val_metric = val_metric or ("pinball" if scenario == 2 else "mape")
         self.n_jobs          = n_jobs
         self.resume          = resume
         self.seed            = int(seed)
@@ -226,9 +229,9 @@ class OptunaOptimizer:
 
     def _objective(self, trial):
         torch.set_num_threads(1)
-        params = sample_params(trial, model_type=self.model_type, use_decomposition=self.use_decomposition)
+        params = sample_params(trial, model_type=self.model_type)
+
         
-        # Assign GPU dynamically if multiple are available
         if torch.cuda.is_available():
             num_gpus = torch.cuda.device_count()
             gpu_id = trial.number % num_gpus
@@ -236,19 +239,10 @@ class OptunaOptimizer:
         else:
             device = torch.device("cpu")
             
-        trainer = make_trainer(
-            self.scenario,
-            params,
-            self._config_dict(),
-            seed=self.seed,
-            trial=trial,
-            model_type=self.model_type,
-            device=device
-        )
+        trainer = make_trainer(self.scenario, params, self._config_dict(), seed=self.seed,
+            trial=trial, model_type=self.model_type, device=device)
         walk_params = build_walk_params(params, self.pred_len)
         loss, metrics = evaluate(trainer, walk_params, params)
-        # Persist fold-level epoch info into Optuna trial user attributes so it
-        # survives process restarts (resume).
         try:
             fold_best_epochs = metrics.get("fold_best_epochs", []) if isinstance(metrics, dict) else []
             trial.set_user_attr("fold_best_epochs", fold_best_epochs)
@@ -260,7 +254,6 @@ class OptunaOptimizer:
                 trial.set_user_attr("cv_min", float(metrics.get("min", float("inf"))))
                 trial.set_user_attr("cv_max", float(metrics.get("max", float("inf"))))
         except Exception:
-            # non-critical if cannot set user attrs (e.g., trial is not a real Optuna trial)
             pass
 
         with self._lock:
@@ -268,8 +261,6 @@ class OptunaOptimizer:
         self._save_trial_checkpoint(trial, params, loss, metrics)
         self._log_trial(trial, params, loss)
         return loss
-
-    # ── Save top-3 ────────────────────────────────────────────────────────────
 
     def _save_top3(self, study: optuna.Study) -> None:
         self.save_dir.mkdir(parents=True, exist_ok=True)
@@ -292,7 +283,6 @@ class OptunaOptimizer:
 
             median_best_epoch = int(round(float(np.median(fold_best_epochs)))) if fold_best_epochs else None
             final_train_epochs = median_best_epoch
-            # Run final training with the fold-wise best epochs to get final test metrics
             final_result = None
             try:
                 trainer = make_trainer(self.scenario, trial.params, self._config_dict(), seed=self.seed, trial=None, model_type=self.model_type)
@@ -305,7 +295,6 @@ class OptunaOptimizer:
                     fixed_epochs=final_train_epochs,
                 )
             except Exception as e:
-                # don't fail the whole saving process if final training fails
                 logger.exception(f"Final training failed for trial {trial.number}: {e}")
 
             payload = self._build_checkpoint_payload(trial, trial.params, trial.value, metrics, rank=rank, final_result=final_result)
@@ -343,7 +332,6 @@ class OptunaOptimizer:
                 f"  {'fold max':<12}: {metrics.get('max', 0):.4f}",
             ]
 
-            # Append final evaluation summary if available
             if final_result is not None:
                 final_metrics = final_result.get('metrics', {})
                 lines.extend([
@@ -357,8 +345,6 @@ class OptunaOptimizer:
                 "\n".join(lines), encoding="utf-8"
             )
             logger.info(f"  Rank {rank} | val={trial.value:.4f} | saved → s{self.scenario}_{self.model_type}_rank{rank}.pt / .txt")
-
-    # ── Callback ──────────────────────────────────────────────────────────────
 
     def _make_callback(self):
         def callback(study, frozen_trial):
@@ -392,7 +378,7 @@ class OptunaOptimizer:
         optuna.logging.set_verbosity(optuna.logging.INFO)
 
         sampler = optuna.samplers.TPESampler(seed=42, n_startup_trials=DEFAULT_N_STARTUP_TRIALS, n_ei_candidates=DEFAULT_N_EI_CANDIDATES)
-        pruner  = optuna.pruners.MedianPruner(n_startup_trials=10)
+        pruner  = optuna.pruners.MedianPruner(n_startup_trials=15, n_warmup_steps=100)
 
         if self.resume:
             try:
@@ -428,6 +414,27 @@ class OptunaOptimizer:
             logger.info(f"\n🆕 Created study : {self.study_name}")
             logger.info(f"   Database       : {self.db_path}")
 
+        if self.model_type == "nbeats":
+            study.enqueue_trial({
+                "seq_length": 24,
+                "n_stacks": 2,
+                "n_blocks": 3,
+                "n_layers": 3,
+                "layer_dim": 384,
+                "dropout": 0.069,
+                "batch_size": 16,
+                "lr": 0.000195,
+            })
+        elif self.model_type == "tsmixer":
+            study.enqueue_trial({
+                "seq_length": 24,
+                "n_block": 2,
+                "dropout": 0.069,
+                "batch_size": 16,
+                "ff_dim": 256,
+                "lr": 0.000195,
+            })
+
         logger.info(f"\n⚙️  Configuration:")
         logger.info(f"   Scenario      : {self.scenario}")
         logger.info(f"   Model         : {self.model_type.upper()}")
@@ -437,6 +444,7 @@ class OptunaOptimizer:
         logger.info(f"   Trials        : {self.n_trials}")
         logger.info(f"   Parallel jobs : {self.n_jobs}")
         logger.info(f"\n🔍 Starting optimisation...")
+
 
         study.optimize(
             self._objective,
@@ -475,19 +483,14 @@ if __name__ == "__main__":
     parser.add_argument("--n_jobs", type=int, default=4, help="Number of parallel jobs.")
     parser.add_argument("--use_decomposition", action="store_true", help="Enable decomposition branch (STL).")
     parser.add_argument("--use_log_return", action="store_true", help="Enable log-return transformation on target Quantity.")
+    parser.add_argument("--data_file", type=str, default=None, help="Path or filename of dataset CSV.")
     parser.add_argument("--resume", action="store_true", help="Resume previous study if exists.")
     
     args = parser.parse_args()
     
-    val_metric = "mape" if args.scenario == 1 else "tc"
+    val_metric = "mape" if args.scenario == 1 else "pinball"
     
-    OptunaOptimizer(
-        scenario=args.scenario,
-        n_trials=args.n_trials,
-        val_metric=val_metric,
-        n_jobs=args.n_jobs,
-        resume=args.resume,
-        model_type=args.model,
-        use_decomposition=args.use_decomposition,
-        use_log_return=args.use_log_return,
-    ).run()
+    OptunaOptimizer(scenario=args.scenario, n_trials=args.n_trials, val_metric=val_metric,
+        n_jobs=args.n_jobs, resume=args.resume, model_type=args.model,
+        use_decomposition=args.use_decomposition, use_log_return=args.use_log_return,
+        data_file=args.data_file,).run()

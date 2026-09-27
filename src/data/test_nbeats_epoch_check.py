@@ -1,15 +1,6 @@
-"""Regression test for Scenario 2 NBEATS epoch selection.
-
-This script reloads the optimized checkpoints for ranks 1, 2, and 3,
-rebuilds the trainer with the exact tuned hyperparameters, retrains every
-fold from scratch twice, and checks that the fold best epochs, median epoch,
-and final epoch match the saved checkpoint metadata.
-"""
-
 import sys
 from pathlib import Path
 
-# Add project root to sys.path to support direct execution
 project_root = str(Path(__file__).resolve().parents[2])
 if project_root not in sys.path:
     sys.path.append(project_root)
@@ -28,7 +19,7 @@ SEED = 42
 PRED_LEN = 3
 EPOCHS = 3000
 PATIENCE = 100
-HOLDING_COST = 2.0
+HOLDING_COST = 4.0
 LEAD_TIME = 2
 ORDERING_COST = 50_000.0
 FORECAST_HORIZON = 4
@@ -113,7 +104,6 @@ def _assert_rank_checkpoint(rank: int) -> dict:
     checkpoint = _load_checkpoint(rank)
     params = checkpoint["params"].copy()
     config = _build_config(params)
-
     trainer = make_trainer(
         SCENARIO,
         params,
@@ -123,7 +113,6 @@ def _assert_rank_checkpoint(rank: int) -> dict:
         model_type=MODEL_TYPE,
     )
     walk_params = build_walk_params(params, PRED_LEN)
-
     first_pass = _retrain_fold_epochs(trainer, params, walk_params)
     second_pass = _retrain_fold_epochs(trainer, params, walk_params)
 

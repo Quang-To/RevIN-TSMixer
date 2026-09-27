@@ -2,38 +2,30 @@ Scenario 2 — Model NHITS — Rank 2
 ==================================================
 
 ── Loss Configuration ──────────────────────────
-  Val Metric  : TC
+  Val Metric  : PINBALL
   Model       : NHITS
 
 ── Hyperparameters ─────────────────────────────
-  seq_length  : 11
-  dropout     : 0.1
-  batch_size  : 3
-  lr          : 0.0001
+  seq_length  : 12
+  dropout     : 0.0
+  batch_size  : 16
+  lr          : 0.01
   n_stacks    : 3
-  n_blocks    : 2
-  n_layers    : 4
-  hidden_dim  : 256
-  seasonal_period: 3
-  stl_seasonal: 9
-  stl_trend   : 9
-  seasonality_model: nhits
+  n_blocks    : 1
+  n_layers    : 3
+  hidden_dim  : 64
 
 ── Fold best epochs ────────────────────────────
-  epochs      : [182, 144, 69]
-  median      : 144
-  final epochs: 144
+  epochs      : [223]
+  median      : 223
+  mean        : 223.0
+  final epochs: 223
 
 ── Validation metric (CV mean) ──────────────────
-  TC_min      : 271747.2763
+  Pinball Loss: 1427.7386
 
 ── CV fold statistics ───────────────────────────
-  fold mean   : 271747.2763
-  fold std    : 14302.6869
-  fold min    : 254341.7425
-  fold max    : 289373.9339
-
-── Final evaluation ───────────────────────────
-  final_epochs: 144
-  final_Tc_min: 283726.3561
-  final_MAPE  : 1.8448
+  fold mean   : 0.0000
+  fold std    : 0.0000
+  fold min    : 0.0000
+  fold max    : 0.0000
