@@ -5,7 +5,7 @@ def sample_params(trial, model_type: str = "tsmixer") -> dict:
     """Lấy mẫu siêu tham số chuẩn xác từ không gian tìm kiếm Optuna (liên tục + log-scale)."""
     model_name = model_type.lower()
     p = {
-        "seq_length": trial.suggest_int("lookback", 6, 24),
+        "seq_length": trial.suggest_categorical("lookback", [6, 9, 12, 18, 24]),
         "lr": trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True),
         "batch_size": trial.suggest_categorical("batch_size", [8, 16, 32]),
         "revin_affine": trial.suggest_categorical("revin_affine", [True, False]),

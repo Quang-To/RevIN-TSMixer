@@ -1,0 +1,2 @@
+﻿hpo_source_scenario,model,lookback,batch_size,learning_rate,hidden_size,n_layers,dropout,revin_affine,mae_mean,rmse_mean,mape_mean,pinball_mean,total_cost_mean,fill_rate_mean,n_eval_seeds
+S5,NBEATS,18,32,0.0097815592883513,128,2,0.1960814831533889,True,17850.732421875,22689.568359375,5.33504581451416,5147.125902157738,4369090.405229523,0.9982148282676786,1

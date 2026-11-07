@@ -2,7 +2,7 @@ SCENARIO   = 2
 MODEL      = "nbeats"  
 VAL_METRIC = "pinball"  
 SEED       = 42
-DATA_FILE  = "data_simulated_s1.csv"  # hoặc "data_simulated_s2.csv", "data_TSI_v2.csv"
+DATA_FILE  = "data_TSI_v2.csv"  # data_TSI_v2.csv hoặc data_simulated_s1.csv -> data_simulated_s6.csv
 
 SEQ_LENGTH = 24
 PRED_LEN   = 1         

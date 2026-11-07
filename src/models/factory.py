@@ -65,6 +65,7 @@ def build_trainer(model_name: str, best_params: dict, TrainerClass, visualizer=N
         seed          = best_params.get("seed", config.SEED),
         use_log_return= best_params.get("use_log_return", config.USE_LOG_RETURN),
         revin_affine  = best_params.get("revin_affine", True),
+        data_file     = best_params.get("data_file", getattr(config, "DATA_FILE", None)),
         visualizer    = visualizer,
     )
 

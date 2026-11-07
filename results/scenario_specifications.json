@@ -1,0 +1,95 @@
+{
+    "s1": {
+        "name": "S1: Homoscedastic Gaussian i.i.d (Baseline)",
+        "dgp_formula": "X_t = \\mu + \\sigma \\epsilon_t, \\quad \\epsilon_t \\sim \\text{i.i.d } \\mathcal{N}(0, 1)",
+        "parameters": {
+            "mu": 349023.17,
+            "sigma": 74361.57,
+            "autocorrelation": "ACF ≈ 0",
+            "seasonality": "None",
+            "trend": "None"
+        },
+        "rationale": "Kiểm tra hiện tượng quá khớp (overfitting) với nhiễu trắng thuần túy. Lý thuyết xác suất chỉ ra dự báo tối ưu là kỳ vọng mu; mọi nỗ lực bắt quy luật quá khứ đều là overfit."
+    },
+    "s2": {
+        "name": "S2: Dynamic Heteroskedasticity (Dị phương sai động)",
+        "dgp_formula": "X_t = \\mu + \\sigma_t \\epsilon_t, \\quad \\sigma_t = \\sigma_{\\text{month}(t)} \\cdot (1 - \\lambda \\cdot t)",
+        "parameters": {
+            "mu": 349023.17,
+            "monthly_sigma_range": "30,120 -> 118,450 VND (tỷ lệ max/min ≈ 4.0)",
+            "variance_decay_rate": "lambda ≈ 0.0035/tháng (giảm biên độ dư theo thời gian)"
+        },
+        "rationale": "Stress-test khả năng co giãn khoảng tin cậy phân vị (quantile spread) khi phương sai biến động mạnh theo mùa và thu hẹp dần theo thời gian."
+    },
+    "s3": {
+        "name": "S3: Skewed & Heavy-Tailed (Fleishman System)",
+        "dgp_formula": "X_t = \\text{Affine}\\left(a + b Z_t + c Z_t^2 + d Z_t^3\\right), \\quad Z_t \\sim \\mathcal{N}(0, 1)",
+        "parameters": {
+            "target_skewness": 1.0,
+            "target_excess_kurtosis": 2.0,
+            "fleishman_coefficients": {
+                "a": -0.154,
+                "b": 0.942,
+                "c": 0.154,
+                "d": 0.021
+            }
+        },
+        "rationale": "Đánh giá độ vững (robustness) của dự báo phân vị cao (P90, P95) và định mức tồn kho khi phân phối nhu cầu có độ lệch dương và đuôi dày (rủi ro cú sốc cực đoan / Black Swan)."
+    },
+    "s4": {
+        "name": "S4: Markov Regime Switching (Concept Drift)",
+        "dgp_formula": "X_t \\sim \\mathcal{N}(\\mu_{S_t}, \\sigma_{S_t}^2), \\quad S_t \\in \\{1: \\text{Normal}, 2: \\text{Crisis}, 3: \\text{Boom}\\}",
+        "parameters": {
+            "transition_matrix_P": [
+                [
+                    0.92,
+                    0.05,
+                    0.03
+                ],
+                [
+                    0.08,
+                    0.88,
+                    0.04
+                ],
+                [
+                    0.06,
+                    0.04,
+                    0.9
+                ]
+            ],
+            "regime_means": [
+                1.0,
+                0.75,
+                1.25
+            ],
+            "regime_stds": [
+                0.75,
+                1.4,
+                0.9
+            ],
+            "min_dwell_time": "18 tháng liên tục mỗi regime (tránh switching vi mô giả tạo)"
+        },
+        "rationale": "Kiểm tra năng lực thích ứng với thay đổi cấu trúc thị trường (structural breaks / concept drift) cả về mức nhu cầu trung bình lẫn độ bất định."
+    },
+    "s5": {
+        "name": "S5: Trend + Seasonality + Rare Shocks (Realistic Demand)",
+        "dgp_formula": "X_t = \\text{Trend}_t + \\text{Harmonics}(12\\text{m}, 4\\text{m}) + \\text{Noise}_t + \\text{Shock}_t",
+        "parameters": {
+            "linear_slope": "-291.8 đơn vị/tháng",
+            "seasonality_cycles": "12 tháng (biên độ 0.25 sigma) + 4 tháng (biên độ 0.42 sigma)",
+            "shock_probability": "p = 0.05 (Poisson/Bernoulli hiếm)",
+            "shock_magnitude": "± 2.5 sigma"
+        },
+        "rationale": "Mô phỏng sát nhất với cấu trúc chuỗi thời gian thực tế của TSI v2: kết hợp đồng thời trend giảm nhẹ, mùa vụ chu kỳ 4 tháng đặc thù và các cú sốc cung cầu bất thường."
+    },
+    "s6": {
+        "name": "S6: Promotion-Driven Bimodal Mixture",
+        "dgp_formula": "X_t \\sim \\pi(Z_t) \\mathcal{N}(\\mu_{\\text{high}}, \\sigma_{\\text{high}}^2) + (1-\\pi(Z_t)) \\mathcal{N}(\\mu_{\\text{low}}, \\sigma_{\\text{low}}^2)",
+        "parameters": {
+            "separation_D": "Ashman D = 3.0 (phân tách hai đỉnh rõ rệt)",
+            "exogenous_driver": "Z_t = Detrended(PromotionAmount)",
+            "pi_high_function": "\\pi_t = \\text{sigmoid}(1.5 \\cdot Z_t) \\in [0.10, 0.90]"
+        },
+        "rationale": "Stress-test năng lực của mô hình đa biến (TSMixer) trong việc tận dụng biến ngoại sinh để phân định chế độ nhu cầu cao điểm/thấp điểm so với mô hình thuần đơn biến."
+    }
+}

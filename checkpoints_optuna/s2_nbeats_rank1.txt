@@ -6,15 +6,15 @@ Scenario 2 — Model NBEATS — Rank 1
   Model       : NBEATS
 
 ── Hyperparameters ─────────────────────────────
-  lookback    : 8
-  learning_rate: 0.00013066739238053285
+  lookback    : 18
+  learning_rate: 0.009413993046829943
   batch_size  : 8
   revin_affine: False
-  hidden_size : 448
-  n_layers    : 2
-  dropout     : 0.05454749016213018
-  n_stacks    : 1
-  n_blocks    : 2
+  hidden_size : 320
+  n_layers    : 3
+  dropout     : 0.2573667400225869
+  n_stacks    : 2
+  n_blocks    : 4
 
 ── Fold best epochs ────────────────────────────
   epochs      : [3]

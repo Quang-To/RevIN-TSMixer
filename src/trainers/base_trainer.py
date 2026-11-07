@@ -270,6 +270,12 @@ class BaseTrainer(ABC):
         )
         metrics["TC_min"] = tc
         metrics["Total_Cost"] = tc
+        metrics["Fill_Rate"] = tc_components.get("fill_rate", np.nan)
+        metrics["Cycle_Service_Level"] = tc_components.get("cycle_service_level", np.nan)
+        metrics["ECE"] = metrics.get("mean_calibration_error", np.nan)
+        metrics["Cov_P5_P95"] = metrics.get("coverage_P95", 0.0) - metrics.get("coverage_P5", 0.0)
+        metrics["Cov_P10_P90"] = metrics.get("coverage_P90", 0.0) - metrics.get("coverage_P10", 0.0)
+        metrics["Cov_P25_P75"] = metrics.get("coverage_P75", 0.0) - metrics.get("coverage_P25", 0.0)
 
         if verbose:
             logging.info(f"\n[Result] Best Epoch={best_epoch} | Best Val Loss={best_val:.4f} | Test MAE={metrics['MAE']:.0f} | Test MAPE={metrics['MAPE']:.2f}% | Test Pinball={metrics['PinballLoss']:.0f} | TC={tc:,.0f}")

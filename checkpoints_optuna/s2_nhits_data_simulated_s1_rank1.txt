@@ -1,0 +1,36 @@
+Scenario 2 — Model NHITS — Rank 1
+==================================================
+
+── Loss Configuration ──────────────────────────
+  Val Metric  : PINBALL
+  Model       : NHITS
+
+── Hyperparameters ─────────────────────────────
+  lookback    : 9
+  learning_rate: 0.00020511104188433984
+  batch_size  : 16
+  revin_affine: True
+  hidden_size : 512
+  n_layers    : 4
+  dropout     : 0.06370173320348284
+  n_stacks    : 1
+  n_blocks    : 1
+
+── Fold best epochs ────────────────────────────
+  epochs      : [3]
+  median      : 3
+  final epochs: 3
+
+── Validation metric (CV mean) ──────────────────
+  TC_min      : 0.0424
+
+── CV fold statistics ───────────────────────────
+  fold mean   : 0.0000
+  fold std    : 0.0000
+  fold min    : 0.0000
+  fold max    : 0.0000
+
+── Final evaluation ───────────────────────────
+  final_epochs: 3
+  final_Tc_min: 15451947.3281
+  final_MAPE  : 16.0839

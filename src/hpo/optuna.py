@@ -94,8 +94,10 @@ class OptunaOptimizer:
         mode_tag = "decomp" if self.use_decomposition else "base"
         if self.use_log_return:
             mode_tag = f"{mode_tag}_logret"
-        self.db_path    = f"sqlite:///optuna_s{scenario}_{model_type}_{mode_tag}.db"
-        self.study_name = f"scenario_{scenario}_{model_type}_{mode_tag}_optimization"
+        data_tag = f"_{Path(self.data_file).stem}" if self.data_file else ""
+        self.file_prefix = f"s{scenario}_{model_type}{data_tag}"
+        self.db_path    = f"sqlite:///optuna_s{scenario}_{model_type}_{mode_tag}{data_tag}.db"
+        self.study_name = f"scenario_{scenario}_{model_type}_{mode_tag}{data_tag}_optimization"
 
     def _log_trial(self, trial, params, loss):
         logger.debug(f"Trial {trial.number} | val_metric = {loss:.4f} | params = {params}")
@@ -104,7 +106,7 @@ class OptunaOptimizer:
         return config_dict_from_obj(self)
 
     def _trial_checkpoint_path(self, trial_number: int) -> Path:
-        return self.save_dir / f"s{self.scenario}_{self.model_type}_trial{trial_number}.pt"
+        return self.save_dir / f"{self.file_prefix}_trial{trial_number}.pt"
 
     def _normalize_fold_best_epochs(self, fold_best_epochs):
         if not fold_best_epochs:
@@ -157,7 +159,7 @@ class OptunaOptimizer:
 
     def _load_trial_checkpoint(self, trial):
         candidates = [self._trial_checkpoint_path(trial.number)]
-        candidates.extend(sorted(self.save_dir.glob(f"s{self.scenario}_{self.model_type}_rank*.pt")))
+        candidates.extend(sorted(self.save_dir.glob(f"{self.file_prefix}_rank*.pt")))
 
         for path in candidates:
             if not path.exists():
@@ -303,7 +305,7 @@ class OptunaOptimizer:
                 "model_type": self.model_type,
                 "final_train_epochs": final_train_epochs,
             })
-            torch.save(payload, self.save_dir / f"s{self.scenario}_{self.model_type}_rank{rank}.pt")
+            torch.save(payload, self.save_dir / f"{self.file_prefix}_rank{rank}.pt")
 
             val_label = "MAPE (%)" if self.val_metric == "mape" else "TC_min"
             lines = [
@@ -341,10 +343,10 @@ class OptunaOptimizer:
                     f"  {'final_Tc_min':<12}: {final_metrics.get('TC_min', 0):.4f}",
                     f"  {'final_MAPE':<12}: {final_metrics.get('MAPE', 0):.4f}",
                 ])
-            (self.save_dir / f"s{self.scenario}_{self.model_type}_rank{rank}.txt").write_text(
+            (self.save_dir / f"{self.file_prefix}_rank{rank}.txt").write_text(
                 "\n".join(lines), encoding="utf-8"
             )
-            logger.info(f"  Rank {rank} | val={trial.value:.4f} | saved → s{self.scenario}_{self.model_type}_rank{rank}.pt / .txt")
+            logger.info(f"  Rank {rank} | val={trial.value:.4f} | saved → {self.file_prefix}_rank{rank}.pt / .txt")
 
     def _make_callback(self):
         def callback(study, frozen_trial):
@@ -416,23 +418,25 @@ class OptunaOptimizer:
 
         if self.model_type == "nbeats":
             study.enqueue_trial({
-                "seq_length": 24,
+                "lookback": 24,
                 "n_stacks": 2,
                 "n_blocks": 3,
                 "n_layers": 3,
-                "layer_dim": 384,
+                "hidden_size": 384,
                 "dropout": 0.069,
                 "batch_size": 16,
-                "lr": 0.000195,
+                "learning_rate": 0.000195,
+                "revin_affine": True,
             })
         elif self.model_type == "tsmixer":
             study.enqueue_trial({
-                "seq_length": 24,
-                "n_block": 2,
+                "lookback": 24,
+                "n_layers": 2,
                 "dropout": 0.069,
                 "batch_size": 16,
-                "ff_dim": 256,
-                "lr": 0.000195,
+                "hidden_size": 256,
+                "learning_rate": 0.000195,
+                "revin_affine": True,
             })
 
         logger.info(f"\n⚙️  Configuration:")

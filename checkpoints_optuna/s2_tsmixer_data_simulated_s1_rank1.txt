@@ -1,0 +1,34 @@
+Scenario 2 — Model TSMIXER — Rank 1
+==================================================
+
+── Loss Configuration ──────────────────────────
+  Val Metric  : PINBALL
+  Model       : TSMIXER
+
+── Hyperparameters ─────────────────────────────
+  lookback    : 9
+  learning_rate: 0.00020511104188433984
+  batch_size  : 16
+  revin_affine: True
+  hidden_size : 512
+  n_layers    : 4
+  dropout     : 0.06370173320348284
+
+── Fold best epochs ────────────────────────────
+  epochs      : [4]
+  median      : 4
+  final epochs: 4
+
+── Validation metric (CV mean) ──────────────────
+  TC_min      : 0.2273
+
+── CV fold statistics ───────────────────────────
+  fold mean   : 0.0000
+  fold std    : 0.0000
+  fold min    : 0.0000
+  fold max    : 0.0000
+
+── Final evaluation ───────────────────────────
+  final_epochs: 4
+  final_Tc_min: 18345529.1510
+  final_MAPE  : 16.6164
