@@ -116,8 +116,8 @@ def calibration_coverage(
 def compute_inventory_metrics(
     demand_actual: np.ndarray,
     quantile_matrix: np.ndarray,
-    holding_cost: float = 4.0,
-    shortage_cost: float = 30.0,
+    holding_cost: float = 4_000.0,
+    shortage_cost: float = 30_000.0,
     ordering_cost: float = 50_000.0,
     lead_time: int = 1,
     quantile_levels: tuple = DEFAULT_QUANTILE_LEVELS,
@@ -129,8 +129,7 @@ def compute_inventory_metrics(
         lead_time      = lead_time,
         quantile_levels= quantile_levels,
     )
-    quantile_matrix_clipped = np.clip(np.asarray(quantile_matrix, dtype=np.float64), 0.0, None)
-    return inv.total_cost(demand_actual, quantile_matrix_clipped)
+    return inv.total_cost(demand_actual, np.asarray(quantile_matrix, dtype=np.float64))
 
 
 def aggregate_overlapping_forecasts(pred_p50: np.ndarray, true: np.ndarray, quantile_matrix: np.ndarray, sample_indices: np.ndarray, pred_len: int, seq_length: int, forecast_horizon: int,) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:

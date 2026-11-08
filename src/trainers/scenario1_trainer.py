@@ -10,7 +10,7 @@ class Scenario1Trainer(BaseTrainer):
     """Validates using MAPE loss."""
 
     def __init__(self, seq_length: int = 6, pred_len: int = 3, batch_size: int = 4, lr: float = 1e-4,
-                 epochs: int = 100,patience: int = 10, holding_cost: float = 4.0, shortage_cost: float = 30.0, lead_time: int = 2,
+                 epochs: int = 100,patience: int = 10, holding_cost: float = 4_000.0, shortage_cost: float = 30_000.0, lead_time: int = 2,
                  ordering_cost: float = 50_000, seed: int = 42, trial: Optional[object] = None,
                  visualizer=None,model_type: str = "tsmixer", use_decomposition: bool = True, device: Optional[torch.device] = None,
                  **kwargs):

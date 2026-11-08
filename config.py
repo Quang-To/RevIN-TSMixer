@@ -28,8 +28,8 @@ LR         = 1.95e-4
 EPOCHS     = 3000
 PATIENCE   = 100
 
-HOLDING_COST     = 4.0      
-SHORTAGE_COST    = 30.0      
+HOLDING_COST     = 4_000.0
+SHORTAGE_COST    = 30_000.0
                            
 ORDERING_COST    = 50_000.0 
 LEAD_TIME        = 1         

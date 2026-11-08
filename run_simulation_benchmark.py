@@ -797,8 +797,7 @@ def main():
         "inventory_costs": {
             "holding_cost": config.HOLDING_COST,
             "shortage_cost": config.SHORTAGE_COST,
-            "ordering_cost": config.ORDERING_COST,
-            "lead_time": config.LEAD_TIME,
+            "policy": "order-up-to S_t = P50_t + z*sigma (sigma = RMSE), không có chi phí đặt hàng",
         },
         "split": {"train": 84, "val": 12, "test": 24},
     }

@@ -23,7 +23,8 @@ def build_model(name: str, lookback: int, horizon: int = 1, n_quantiles: int = l
         return NHITSModel(
             seq_length=lookback, pred_len=horizon,
             hidden_dim=hidden_size, n_layers=n_layers, dropout=dropout,
-            pool_kernels=kw.get("pool_kernels", (1, 2, 4)),
+            n_stacks=kw.get("n_stacks", 3), n_blocks=kw.get("n_blocks", 1),
+            pool_kernels=kw.get("pool_kernels"),
             revin_affine=revin_affine,
         )
     elif name == "tsmixer":

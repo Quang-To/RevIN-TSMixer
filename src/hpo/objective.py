@@ -60,13 +60,13 @@ def config_dict_from_obj(obj) -> dict:
         import config
         default_shortage = config.SHORTAGE_COST
     except ImportError:
-        default_shortage = 30.0
+        default_shortage = 30_000.0
 
     return {
         "pred_len":      getattr(obj, "pred_len", 1),
         "epochs":        getattr(obj, "epochs", 300),
         "patience":      getattr(obj, "patience", 30),
-        "holding_cost":  getattr(obj, "holding_cost", 4.0),
+        "holding_cost":  getattr(obj, "holding_cost", 4_000.0),
         "shortage_cost": getattr(obj, "shortage_cost", default_shortage),
         "lead_time":     getattr(obj, "lead_time", 1),
         "ordering_cost": getattr(obj, "ordering_cost", 50000.0),
