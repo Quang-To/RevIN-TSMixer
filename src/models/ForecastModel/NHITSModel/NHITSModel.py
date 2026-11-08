@@ -50,12 +50,14 @@ class NHITSModel(nn.Module):
         self.quantiles = quantiles
         self.n_quantiles = len(quantiles)
 
-        # Mỗi stack ứng với một kernel pooling (1, 2, 4, ...) và gồm n_blocks block; pool_kernels tường minh sẽ thay cho n_stacks.
-        kernels = tuple(pool_kernels) if pool_kernels is not None else tuple(2 ** i for i in range(n_stacks))
+        # Mỗi stack ứng với một kernel pooling và gồm n_blocks block. Một stack dùng kernel 2,
+        # vì kernel 1 (không pooling) làm mô hình trùng hệt N-BEATS.
+        if pool_kernels is None:
+            pool_kernels = (2,) if n_stacks == 1 else tuple(2 ** i for i in range(n_stacks))
         self.revin = RevIN(affine=revin_affine)
         self.blocks = nn.ModuleList([
             _NHITSBlock(seq_length, pred_len, self.n_quantiles, hidden_dim, n_layers, dropout, k)
-            for k in kernels for _ in range(n_blocks)
+            for k in pool_kernels for _ in range(n_blocks)
         ])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
