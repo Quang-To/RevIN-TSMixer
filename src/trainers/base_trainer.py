@@ -25,8 +25,8 @@ GRAD_CLIP_NORM = 1.0
 
 class BaseTrainer(ABC):
     def __init__(self, seq_length: int = 24, batch_size: int = 16, lr: float = 1e-3,
-                 epochs: int = 300, patience: int = 30, holding_cost: float = 4.0,
-                 shortage_cost: float = 30.0, lead_time: int = 1, ordering_cost: float = 50_000,
+                 epochs: int = 300, patience: int = 30, holding_cost: float = 4_000.0,
+                 shortage_cost: float = 30_000.0, lead_time: int = 1, ordering_cost: float = 50_000,
                  pred_len: int = 1, scenario: int = 2, val_metric_type: str = "pinball",
                  seed: int = 42, trial: Optional[object] = None, visualizer=None,
                  model_type: str = "tsmixer",
@@ -130,6 +130,7 @@ class BaseTrainer(ABC):
         elif self.model_type == "nhits":
             return NHITSModel(
                 seq_length=self.seq_length, pred_len=self.pred_len,
+                n_stacks=self.n_stacks, n_blocks=self.n_blocks,
                 hidden_dim=self.hidden_dim, n_layers=self.n_layers,
                 dropout=self.dropout, revin_affine=self.revin_affine,
             ).to(self.device)

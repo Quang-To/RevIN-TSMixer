@@ -1,95 +1,85 @@
 {
     "s1": {
-        "name": "S1: Homoscedastic Gaussian i.i.d (Baseline)",
-        "dgp_formula": "X_t = \\mu + \\sigma \\epsilon_t, \\quad \\epsilon_t \\sim \\text{i.i.d } \\mathcal{N}(0, 1)",
+        "name": "S1: Calibrated Base (Trend + Seasonal + AR, bootstrap noise)",
+        "dgp_formula": "y_t=\\max(0,m_t+u_t),\\ m_t=a+bt+\\sum_{k\\le K}[c_k\\sin\\tfrac{2\\pi kt}{P}+d_k\\cos\\tfrac{2\\pi kt}{P}],\\ u_t=\\sum_{j\\le p}\\phi_j u_{t-j}+k\\sigma s_t\\varepsilon_t,\\ \\varepsilon_t\\sim\\hat F_{\\text{resid}}",
         "parameters": {
-            "mu": 349023.17,
-            "sigma": 74361.57,
-            "autocorrelation": "ACF ≈ 0",
-            "seasonality": "None",
-            "trend": "None"
+            "season_period_P": 24,
+            "n_harmonics_K (BIC)": 11,
+            "trend_slope": "-247.3 / tháng",
+            "ar_order_p (BIC)": 6,
+            "phi": [
+                0.305,
+                -0.265,
+                -0.131,
+                -0.289,
+                0.238,
+                -0.2
+            ],
+            "ar_spectral_radius": 0.833,
+            "sigma_innov": "35,429 (x noise_scale=1.0)",
+            "R2_deterministic / R2_total (calib)": "0.63 / 0.77",
+            "calibration_sample": "y[0:120]"
         },
-        "rationale": "Kiểm tra hiện tượng quá khớp (overfitting) với nhiễu trắng thuần túy. Lý thuyết xác suất chỉ ra dự báo tối ưu là kỳ vọng mu; mọi nỗ lực bắt quy luật quá khứ đều là overfit."
+        "rationale": "Kịch bản nền tái tạo cấu trúc trend/mùa vụ/tự tương quan của dữ liệu thật; đo năng lực khai thác cấu trúc động khi nhiễu có hình dạng thực tế."
     },
     "s2": {
-        "name": "S2: Dynamic Heteroskedasticity (Dị phương sai động)",
-        "dgp_formula": "X_t = \\mu + \\sigma_t \\epsilon_t, \\quad \\sigma_t = \\sigma_{\\text{month}(t)} \\cdot (1 - \\lambda \\cdot t)",
+        "name": "S2: Base + Seasonal Heteroscedasticity",
+        "dgp_formula": "\\text{Base},\\ s_t=h_{\\text{month}(t)}^{\\gamma}",
         "parameters": {
-            "mu": 349023.17,
-            "monthly_sigma_range": "30,120 -> 118,450 VND (tỷ lệ max/min ≈ 4.0)",
-            "variance_decay_rate": "lambda ≈ 0.0035/tháng (giảm biên độ dư theo thời gian)"
+            "gamma (hetero_power)": 1.0,
+            "max/min scale ratio": 5.5
         },
-        "rationale": "Stress-test khả năng co giãn khoảng tin cậy phân vị (quantile spread) khi phương sai biến động mạnh theo mùa và thu hẹp dần theo thời gian."
+        "rationale": "Kiểm tra khả năng co giãn độ rộng khoảng phân vị theo tháng."
     },
     "s3": {
-        "name": "S3: Skewed & Heavy-Tailed (Fleishman System)",
-        "dgp_formula": "X_t = \\text{Affine}\\left(a + b Z_t + c Z_t^2 + d Z_t^3\\right), \\quad Z_t \\sim \\mathcal{N}(0, 1)",
+        "name": "S3: Base + Heavy-tailed Innovations (Student-t)",
+        "dgp_formula": "\\text{Base},\\ \\varepsilon_t\\sim t_\\nu\\sqrt{(\\nu-2)/\\nu}",
         "parameters": {
-            "target_skewness": 1.0,
-            "target_excess_kurtosis": 2.0,
-            "fleishman_coefficients": {
-                "a": -0.154,
-                "b": 0.942,
-                "c": 0.154,
-                "d": 0.021
-            }
+            "nu (t_df)": 3.0
         },
-        "rationale": "Đánh giá độ vững (robustness) của dự báo phân vị cao (P90, P95) và định mức tồn kho khi phân phối nhu cầu có độ lệch dương và đuôi dày (rủi ro cú sốc cực đoan / Black Swan)."
+        "rationale": "Kiểm tra độ vững của phân vị đuôi (P5/P95) và chi phí tồn kho khi nhiễu đuôi dày."
     },
     "s4": {
-        "name": "S4: Markov Regime Switching (Concept Drift)",
-        "dgp_formula": "X_t \\sim \\mathcal{N}(\\mu_{S_t}, \\sigma_{S_t}^2), \\quad S_t \\in \\{1: \\text{Normal}, 2: \\text{Crisis}, 3: \\text{Boom}\\}",
+        "name": "S4: Base + Level Shift in Test Period",
+        "dgp_formula": "\\text{Base},\\ m_t\\mathrel{+}=\\delta\\,\\mathbb 1[t\\ge\\tau]",
         "parameters": {
-            "transition_matrix_P": [
-                [
-                    0.92,
-                    0.05,
-                    0.03
-                ],
-                [
-                    0.08,
-                    0.88,
-                    0.04
-                ],
-                [
-                    0.06,
-                    0.04,
-                    0.9
-                ]
+            "|delta| / mean": [
+                0.15,
+                0.25
             ],
-            "regime_means": [
-                1.0,
-                0.75,
-                1.25
-            ],
-            "regime_stds": [
-                0.75,
-                1.4,
+            "tau / n": [
+                0.8,
                 0.9
             ],
-            "min_dwell_time": "18 tháng liên tục mỗi regime (tránh switching vi mô giả tạo)"
+            "sign": "ngẫu nhiên ±"
         },
-        "rationale": "Kiểm tra năng lực thích ứng với thay đổi cấu trúc thị trường (structural breaks / concept drift) cả về mức nhu cầu trung bình lẫn độ bất định."
+        "rationale": "Concept drift xảy ra trong giai đoạn test; đo khả năng thích ứng (vd. RevIN) khi mức nhu cầu đổi đột ngột."
     },
     "s5": {
-        "name": "S5: Trend + Seasonality + Rare Shocks (Realistic Demand)",
-        "dgp_formula": "X_t = \\text{Trend}_t + \\text{Harmonics}(12\\text{m}, 4\\text{m}) + \\text{Noise}_t + \\text{Shock}_t",
+        "name": "S5: Base + Trend Break",
+        "dgp_formula": "\\text{Base},\\ m_t\\mathrel{+}=\\Delta_b\\max(0,t-\\tau)",
         "parameters": {
-            "linear_slope": "-291.8 đơn vị/tháng",
-            "seasonality_cycles": "12 tháng (biên độ 0.25 sigma) + 4 tháng (biên độ 0.42 sigma)",
-            "shock_probability": "p = 0.05 (Poisson/Bernoulli hiếm)",
-            "shock_magnitude": "± 2.5 sigma"
+            "|Delta_b| / mean per month": [
+                0.004,
+                0.008
+            ],
+            "tau / n": [
+                0.7,
+                0.8
+            ],
+            "sign": "ngẫu nhiên ±"
         },
-        "rationale": "Mô phỏng sát nhất với cấu trúc chuỗi thời gian thực tế của TSI v2: kết hợp đồng thời trend giảm nhẹ, mùa vụ chu kỳ 4 tháng đặc thù và các cú sốc cung cầu bất thường."
+        "rationale": "Gãy trend quanh ranh giới train/val: mô hình phải ngoại suy độ dốc mới."
     },
     "s6": {
-        "name": "S6: Promotion-Driven Bimodal Mixture",
-        "dgp_formula": "X_t \\sim \\pi(Z_t) \\mathcal{N}(\\mu_{\\text{high}}, \\sigma_{\\text{high}}^2) + (1-\\pi(Z_t)) \\mathcal{N}(\\mu_{\\text{low}}, \\sigma_{\\text{low}}^2)",
+        "name": "S6: Base + Lagged Exogenous Driver (Promotion)",
+        "dgp_formula": "\\text{Base},\\ m_t\\mathrel{+}=\\beta k\\sigma\\,\\tilde g(z_{t-\\ell}),\\ \\tilde g=\\text{std}(\\tanh z)",
         "parameters": {
-            "separation_D": "Ashman D = 3.0 (phân tách hai đỉnh rõ rệt)",
-            "exogenous_driver": "Z_t = Detrended(PromotionAmount)",
-            "pi_high_function": "\\pi_t = \\text{sigmoid}(1.5 \\cdot Z_t) \\in [0.10, 0.90]"
+            "beta (exog_beta)": 1.0,
+            "lag": 1,
+            "driver": "PromotionAmount khử trend tuyến tính, chuẩn hóa median/IQR",
+            "share of innovation variance": 0.5
         },
-        "rationale": "Stress-test năng lực của mô hình đa biến (TSMixer) trong việc tận dụng biến ngoại sinh để phân định chế độ nhu cầu cao điểm/thấp điểm so với mô hình thuần đơn biến."
+        "rationale": "Đo lợi ích của mixing đa biến: chỉ mô hình nhìn thấy biến ngoại sinh trễ mới khai thác được phần tín hiệu này."
     }
 }

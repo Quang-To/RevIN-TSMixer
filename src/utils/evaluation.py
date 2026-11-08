@@ -72,12 +72,9 @@ def print_summary(result: dict, scenario: int, seed: int) -> None:
 
     if tc_components:
         print("\nTC components:")
-        print(f"  Ordering cost : {tc_components.get('ordering_cost_total', 0):.2f}")
         print(f"  Holding cost  : {tc_components.get('holding_cost_total', 0):.2f}")
         print(f"  Shortage cost : {tc_components.get('shortage_cost_total', 0):.2f}")
-        print(f"  q*            : {tc_components.get('q_star', 0):.2f}")
         print(f"  Safety stock  : {tc_components.get('safety_stock', 0):.2f}")
-        print(f"  Reorder point : {tc_components.get('reorder_point', 0):.2f}")
 
     # Forecast summary
     preds_arr = np.array(result.get('preds', []))

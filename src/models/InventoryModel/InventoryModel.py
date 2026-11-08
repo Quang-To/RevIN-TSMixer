@@ -5,7 +5,7 @@ from scipy.stats import norm as _norm
 DEFAULT_QUANTILE_LEVELS = (0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95)
 
 class InventoryModel:
-    def __init__(self, holding_cost: float = 4.0, shortage_cost: float = 30.0, ordering_cost: float = 50_000.0, lead_time: int = 1, quantile_levels: Sequence[float] = DEFAULT_QUANTILE_LEVELS,):
+    def __init__(self, holding_cost: float = 4_000.0, shortage_cost: float = 30_000.0, ordering_cost: float = 50_000.0, lead_time: int = 1, quantile_levels: Sequence[float] = DEFAULT_QUANTILE_LEVELS,):
         self.holding_cost   = float(holding_cost)
         self.shortage_cost  = float(shortage_cost)
         self.ordering_cost  = float(ordering_cost)
@@ -16,20 +16,10 @@ class InventoryModel:
     def critical_ratio(self) -> float:
         return self.shortage_cost / (self.shortage_cost + self.holding_cost)
 
-    def quantile_order_level(self, quantile_forecasts: np.ndarray,) -> np.ndarray:
-        CR = self.critical_ratio
-        q  = np.asarray(quantile_forecasts, dtype=np.float64)
-
-        if q.ndim == 1:
-            return float(np.interp(CR, self.quantile_levels, q))
-        else:
-            return np.array([
-                np.interp(CR, self.quantile_levels, row)
-                for row in q
-            ])
-
     def total_cost(self, demand_actual: np.ndarray, quantile_forecasts: np.ndarray,) -> tuple[float, dict]:
-        d   = np.asarray(demand_actual,      dtype=np.float64).flatten()
+        """Mô phỏng đặt-lên-mức: S_t = P50_t + z*sigma, z = Phi^-1(CR), sigma = RMSE của P50 trên chính chuỗi đánh giá.
+        Chi phí = Cu * sum(max(d-S, 0)) + Co * sum(max(S-d, 0)), không có chi phí đặt hàng."""
+        d   =np.asarray(demand_actual,      dtype=np.float64).flatten()
         qf  = np.asarray(quantile_forecasts, dtype=np.float64)
 
         if qf.ndim == 3:
@@ -50,49 +40,36 @@ class InventoryModel:
             )
         p50_idx = int(np.argmin(np.abs(self.quantile_levels - 0.50)))
         p50 = qf[:, p50_idx]
-        y_cr = np.clip(self.quantile_order_level(qf), 0.0, None)
-        quantile_uplift = y_cr - p50
-        quantile_uplift_mean = float(np.mean(quantile_uplift))
+        sigma = float(np.sqrt(np.mean((d - p50) ** 2)))
+        safety_stock = float(_norm.ppf(CR)) * sigma
+        s_level = p50 + safety_stock
 
-        holding_per_period  = np.maximum(y_cr - d, 0.0)   
-        shortage_per_period = np.maximum(d  - y_cr, 0.0)  
+        shortage_units = np.clip(d - s_level, 0.0, None)
+        holding_units  = np.clip(s_level - d, 0.0, None)
 
-        holding_units_total = float(np.sum(holding_per_period))
-        shortage_units_total = float(np.sum(shortage_per_period))
-        holding_total = self.holding_cost * holding_units_total
+        holding_units_total  = float(np.sum(holding_units))
+        shortage_units_total = float(np.sum(shortage_units))
+        holding_total  = self.holding_cost * holding_units_total
         shortage_total = self.shortage_cost * shortage_units_total
+        total = holding_total + shortage_total
 
-        mu = np.mean(np.clip(d, 1.0, None))
-        annual_demand = 12.0 * mu
-        q_star = np.sqrt(2.0 * self.ordering_cost * annual_demand / max(self.holding_cost, 1e-8))
-        ordering_total = self.ordering_cost * (annual_demand / max(q_star, 1e-8))
-
-        total = holding_total + shortage_total + ordering_total
-
-        units_short     = np.maximum(d - y_cr, 0.0)
-        fill_rate       = float(1.0 - np.sum(units_short) / max(np.sum(d), 1e-8))
-        fill_rate       = float(np.clip(fill_rate, 0.0, 1.0))
-        cycle_service_level = float(np.mean(d <= y_cr))
-        stockout_months = int(np.sum(d > y_cr))              
-        p50_forecast    = float(np.mean(qf[:, p50_idx]))
+        fill_rate       = float(1.0 - shortage_units_total / float(np.sum(d)))
+        cycle_service_level = float(np.mean(d <= s_level))
+        stockout_months = int(np.sum(shortage_units > 0))
+        p50_forecast    = float(np.mean(p50))
 
         components = {
             "holding_cost_total":  float(holding_total),
             "shortage_cost_total": float(shortage_total),
-            "ordering_cost_total": float(ordering_total),
-            "ordering_cost_in_realized_tc": True,
             "cost_unit":             "configured_cost_unit",
             "holding_units_total":   holding_units_total,
             "shortage_units_total":  shortage_units_total,
             # Inventory parameters
             "critical_ratio":      float(CR),
-            "y_cr_mean":           float(np.mean(y_cr)),
-            "q_star":              float(q_star),
-            "mu":                  float(mu),
-            "annual_demand":       float(annual_demand),
-            "quantile_uplift_mean": quantile_uplift_mean,
-            # Note: y_cr_mean above is the newsvendor prep level yCR, NOT the
-            # true (r,q) reorder point r = mu*L + SS (see total_cost_point).
+            "sigma":               sigma,
+            "safety_stock":        safety_stock,
+            "s_level_mean":        float(np.mean(s_level)),
+            "mu":                  float(np.mean(d)),
             # 3-tier metrics
             "fill_rate":           fill_rate,
             "cycle_service_level": cycle_service_level,

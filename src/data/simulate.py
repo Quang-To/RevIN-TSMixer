@@ -1,24 +1,34 @@
 """
-Module mô phỏng dữ liệu (Data Simulation) cho bài toán dự báo nhu cầu (Quantity).
-Cung cấp 6 kịch bản kiểm thử (Stress testing & Concept drift testing):
+Mô phỏng dữ liệu nhu cầu (Quantity) HIỆU CHỈNH THEO ĐỘNG HỌC của chuỗi thật (data_TSI_v2.csv).
 
-  1. S1: Phân phối chuẩn tĩnh (Homoscedastic Gaussian i.i.d)
-  2. S2: Dị phương sai theo tháng thật + xu hướng giảm biên độ
-  3. S3: Lệch / nặng đuôi, điều khiển Skewness & Kurtosis bằng Fleishman
-  4. S4: Regime shift mean + variance (Markov Switching, THỜI GIAN LƯU LIÊN TỤC >= min_regime_len)
-  5. S5: Trend + Seasonality (12 & 4 tháng) + cú sốc hiếm
-  6. S6: Mixture hai đỉnh, xác suất đỉnh cao điều khiển bởi PromotionAmount đã khử trend
+Thiết kế chung (mọi kịch bản dùng chung một DGP nền, chỉ thêm MỘT yếu tố gây nhiễu):
 
-Quy ước chung:
-- Exact Moment Matching: mọi kịch bản được co giãn affine để sample mean/std = dữ liệu gốc.
-  Phép co giãn y = mu + sigma * (raw - m) / s  (m, s = mean, std mẫu của raw) được LƯU vào `meta`
-  để Oracle áp dụng cùng phép biến đổi -> Oracle khớp đúng DGP thực sự của dữ liệu đã sinh.
-- Sau matching, giá trị âm bị clip về 0 (nhu cầu không âm). Việc này làm lệch nhẹ moment
-  (chỉ xảy ra ở S2 với ~2% seed) và được báo qua RuntimeWarning + meta["n_clipped"].
-- Mọi hàm simulate_scenario_k nhận thêm `meta: dict | None`; nếu truyền dict rỗng, hàm sẽ điền
-  thông tin DGP cần cho OracleDGP. Kiểu trả về giữ nguyên như bản cũ.
-- Dữ liệu S1, S2, S3, S5, S6 ở n=120 trùng bit-for-bit với bản cũ (cùng seed). S4 thay đổi
-  vì cách sinh regime được sửa đúng thời gian lưu.
+    y_t = max(0, m_t + u_t)
+    m_t = a + b * min(t, n_base-1) + sum_k [c_k sin(2 pi k t / P) + d_k cos(2 pi k t / P)]   (+ stressor)
+    u_t = sum_{j=1..p} phi_j u_{t-j} + k * sigma_t * s_t * eps_t
+    sigma_t = sigma_pre (t < tau) | sigma_post (t >= tau)
+
+  - tau: điểm đổi chế độ nhiễu, ước lượng từ sai phân mùa vụ y_t - y_{t-P} (chuỗi thật ồn mạnh trước tau, gần tuần hoàn sau tau).
+  - (a, b, c_k, d_k): hồi quy có trọng số 1/sigma^2 theo chế độ trên trend + Fourier chu kỳ P (mặc định 24, K chọn theo BIC).
+  - phi: AR(p) fit bằng OLS riêng cho từng chế độ trên phần dư đã chuẩn hóa (p chọn theo BIC trên mẫu chung, ép dừng nếu cần).
+  - eps_t: residual bootstrap (rút i.i.d từ phần dư AR đã chuẩn hóa theo chế độ) -> giữ hình dạng nhiễu thật.
+  - k = noise_scale: núm điều chỉnh tỷ lệ tín hiệu/nhiễu (SNR) cho thí nghiệm quét.
+
+Sáu kịch bản (s1 = nền, s2..s6 = nền + một stressor):
+  S1 Base            : DGP hiệu chỉnh, nhiễu bootstrap đồng phương sai.
+  S2 Heteroscedastic : s_t = h(month)^power, h ước lượng từ RMS phần dư theo tháng (khuếch đại bằng power).
+  S3 Heavy-tailed    : eps_t ~ Student-t(nu) chuẩn hóa phương sai 1 thay cho bootstrap.
+  S4 Level shift     : m_t += delta * 1[t >= tau], tau rơi vào giai đoạn TEST, |delta| ~ U(15%, 25%) * mean.
+  S5 Trend break     : m_t += Delta_b * max(0, t - tau), tau quanh cuối Train/Val, độ dốc mới đổi dấu ngẫu nhiên.
+  S6 Exogenous driver: m_t += beta * k * sigma_t * g(z_{t-lag}), z = PromotionAmount khử trend (robust), g = tanh chuẩn hóa.
+                       Hiệu ứng đi qua giá trị TRỄ của biến ngoại sinh nên mô hình đa biến quan sát được nó.
+
+Oracle (OracleDGP): biết DGP & tham số, dự báo một bước với quá khứ thật:
+    E[y_t | F_{t-1}] = m_t + sum phi_j u_{t-j};   Q_tau = max(0, E + k sigma s_t F_eps^{-1}(tau)).
+  Đây là cận dưới lý thuyết cho pinball loss một bước (S4/S5 là oracle "biết điểm gãy").
+
+Common random numbers: luồng nhiễu (rng_noise) tách khỏi luồng tham số kịch bản (rng_scn), nên cùng seed thì
+S1/S2/S4/S5/S6 dùng chung chuỗi nhiễu -> so sánh giữa các kịch bản chỉ khác ở stressor.
 """
 
 import sys
@@ -30,7 +40,7 @@ import argparse
 import warnings
 import numpy as np
 import pandas as pd
-from scipy import stats, optimize
+from scipy import stats
 import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,24 +50,51 @@ RESULTS_DIR = ROOT / "results"
 
 SCENARIO_KEYS = ("s1", "s2", "s3", "s4", "s5", "s6")
 
+SCENARIO_NAMES = {
+    "s1": "S1: Calibrated Base (Trend + Seasonal + AR, bootstrap noise)",
+    "s2": "S2: Base + Seasonal Heteroscedasticity",
+    "s3": "S3: Base + Heavy-tailed Innovations (Student-t)",
+    "s4": "S4: Base + Level Shift in Test Period",
+    "s5": "S5: Base + Trend Break",
+    "s6": "S6: Base + Lagged Exogenous Driver (Promotion)",
+}
+
+# Tham số stressor mặc định. Mọi giá trị đều override được qua simulate_by_key(..., **overrides).
+DEFAULT_SCENARIO_PARAMS = {
+    "noise_scale": 1.0,            # k: nhân với sigma của innovation (SNR sweep)
+    "hetero_power": 1.0,           # S2: 1.0 = đúng pattern RMS phần dư theo tháng của dữ liệu thật (>1 để khuếch đại)
+    "t_df": 3.0,                   # S3: bậc tự do Student-t
+    "shift_frac": (0.15, 0.25),    # S4: |delta| / mean
+    "shift_window": (0.80, 0.90),  # S4: vị trí điểm gãy theo tỷ lệ chiều dài (0.8n..0.9n = đầu giai đoạn test)
+    "slope_frac": (0.004, 0.008),  # S5: |thay đổi độ dốc| / mean mỗi tháng
+    "break_window": (0.70, 0.80),  # S5: vị trí gãy trend (cuối Train/Val)
+    "exog_beta": 1.0,              # S6: cường độ driver tính theo đơn vị k*sigma
+    "exog_lag": 1,                 # S6: độ trễ của driver
+}
+
+AR_STABILITY_LIMIT = 0.97
+BURN_IN = 120
+
 
 # ==============================================================================
-# 1. TRÍCH XUẤT ĐẶC TRƯNG THỐNG KÊ NỀN TẢNG (CALIBRATION SOURCE)
+# 1. HIỆU CHỈNH (CALIBRATION) TỪ DỮ LIỆU THẬT
 # ==============================================================================
 
 def month_index(n: int, start_month: int) -> np.ndarray:
-    """Chỉ số tháng 1..12 cho n bước liên tiếp, bắt đầu từ start_month (đúng với mọi n)."""
+    """Chỉ số tháng 1..12 cho n bước liên tiếp, bắt đầu từ start_month."""
     return (start_month - 1 + np.arange(n)) % 12 + 1
 
 
-def harmonic_design(n: int) -> np.ndarray:
-    """Ma trận thiết kế [1, t, sin12, cos12, sin4, cos4] cho t = 0..n-1 (đúng với mọi n)."""
-    t = np.arange(n, dtype=float)
-    return np.column_stack([
-        np.ones(n), t,
-        np.sin(2.0 * np.pi * t / 12.0), np.cos(2.0 * np.pi * t / 12.0),
-        np.sin(2.0 * np.pi * t / 4.0), np.cos(2.0 * np.pi * t / 4.0),
-    ])
+def fourier_design(t: np.ndarray, period: int, n_harmonics: int, trend_cap: int | None = None) -> np.ndarray:
+    """Ma trận [1, t, sin/cos k=1..K]. Trend bị chặn tại trend_cap để chuỗi dài không trôi về âm."""
+    t = np.asarray(t, dtype=float)
+    t_trend = np.minimum(t, trend_cap) if trend_cap is not None else t
+    cols = [np.ones_like(t), t_trend]
+    for k in range(1, n_harmonics + 1):
+        if 2 * k != period:                       # sin tại tần số Nyquist luôn bằng 0
+            cols.append(np.sin(2.0 * np.pi * k * t / period))
+        cols.append(np.cos(2.0 * np.pi * k * t / period))
+    return np.column_stack(cols)
 
 
 def detrended_promo_driver(promo: np.ndarray) -> np.ndarray:
@@ -70,282 +107,454 @@ def detrended_promo_driver(promo: np.ndarray) -> np.ndarray:
     return (promo_detrend - p_med) / p_iqr
 
 
-def get_base_statistics(df_base: pd.DataFrame) -> dict:
-    """Trích xuất các đặc trưng kinh tế lượng từ dữ liệu thực."""
-    quantity = df_base["Quantity"].to_numpy(dtype=float)
-    n = len(quantity)
-    t = np.arange(n)
+def _ar_design(u: np.ndarray, p: int, start: int):
+    rows = range(start, len(u))
+    X = np.array([u[k - p:k][::-1] for k in rows]) if p > 0 else np.zeros((len(rows), 0))
+    return X, u[start:]
+
+
+def _spectral_radius(phi: np.ndarray) -> float:
+    p = len(phi)
+    if p == 0:
+        return 0.0
+    comp = np.zeros((p, p))
+    comp[0] = phi
+    comp[1:, :-1] = np.eye(p - 1)
+    return float(np.max(np.abs(np.linalg.eigvals(comp))))
+
+
+def _select_ar(u: np.ndarray, max_p: int):
+    """Chọn bậc AR theo BIC trên mẫu chung (bắt đầu tại max_p) rồi fit lại trên toàn bộ mẫu khả dụng."""
+    best_p, best_bic = 0, np.inf
+    for p in range(0, max_p + 1):
+        X, T = _ar_design(u, p, max_p)
+        phi = np.linalg.lstsq(X, T, rcond=None)[0] if p > 0 else np.zeros(0)
+        res = T - X @ phi
+        m = len(res)
+        bic = m * np.log(res @ res / m) + p * np.log(m)
+        if bic < best_bic:
+            best_p, best_bic = p, bic
+    X, T = _ar_design(u, best_p, best_p)
+    phi = np.linalg.lstsq(X, T, rcond=None)[0] if best_p > 0 else np.zeros(0)
+    res = T - X @ phi
+
+    rho = _spectral_radius(phi)
+    if rho >= AR_STABILITY_LIMIT:                 # ép dừng: phi_j *= c^j tương đương co nghiệm theo hệ số c
+        c = AR_STABILITY_LIMIT / rho
+        phi = phi * c ** np.arange(1, best_p + 1)
+        res = T - X @ phi
+    return best_p, phi, res, rho
+
+
+def parse_regime_break(value: str | int | None) -> str | int | None:
+    """Chuyển tham số dòng lệnh thành 'auto' | None | t (số nguyên)."""
+    if value is None or isinstance(value, int):
+        return value
+    text = str(value).strip().lower()
+    return text if text == "auto" else None if text == "none" else int(text)
+
+
+def detect_regime_break(y: np.ndarray, period: int) -> int | None:
+    """
+    Ước lượng điểm đổi chế độ tau bằng change-point phương sai trên d_i = y_{i+P} - y_i (cực đại likelihood Gauss).
+    Dùng sai phân mùa vụ để không phải fit Fourier trên đoạn ngắn. d_i nhiễu mạnh khi y_i hoặc y_{i+P} thuộc chế độ ồn,
+    nên: ồn -> êm thì tau = k; êm -> ồn thì tau = k + P. Trả về None nếu chuỗi quá ngắn.
+    """
+    d = y[period:] - y[:-period]
+    m = len(d)
+    if m < 2 * period:
+        return None
+    best_cost, best_k = np.inf, None
+    for k in range(period, m - period + 1):
+        cost = k * np.log(np.mean(d[:k] ** 2) + 1e-12) + (m - k) * np.log(np.mean(d[k:] ** 2) + 1e-12)
+        if cost < best_cost:
+            best_cost, best_k = cost, k
+    noisy_first = np.mean(d[:best_k] ** 2) >= np.mean(d[best_k:] ** 2)
+    return int(best_k if noisy_first else best_k + period)
+
+
+def _fit_mean(X: np.ndarray, y: np.ndarray, tau: int | None, n_iter: int = 25):
+    """OLS (tau=None) hoặc WLS lặp với trọng số 1/sigma theo chế độ. Trả về (beta, s_pre, s_post, -2logL rút gọn)."""
+    n = len(y)
+    if tau is None:
+        beta = np.linalg.lstsq(X, y, rcond=None)[0]
+        s = float(np.sqrt(np.mean((y - X @ beta) ** 2)))
+        return beta, s, s, n * np.log(s ** 2)
+    is_pre = np.arange(n) < tau
+    w = np.ones(n)
+    for _ in range(n_iter):
+        beta = np.linalg.lstsq(X * w[:, None], y * w, rcond=None)[0]
+        r = y - X @ beta
+        s_pre = float(np.sqrt(np.mean(r[is_pre] ** 2)))
+        s_post = float(np.sqrt(np.mean(r[~is_pre] ** 2)))
+        w = np.where(is_pre, 1.0 / s_pre, 1.0 / s_post)
+    return beta, s_pre, s_post, tau * np.log(s_pre ** 2) + (n - tau) * np.log(s_post ** 2)
+
+
+def sigma_path(n: int, base_stats: dict) -> np.ndarray:
+    """sigma_t của innovation: sigma_pre trước tau, sigma_post từ tau trở đi (hằng số nếu một chế độ)."""
+    tau = base_stats["regime_break"]
+    out = np.full(n, base_stats["sigma_post"], dtype=float)
+    if tau is not None:
+        out[:tau] = base_stats["sigma_pre"]
+    return out
+
+
+def get_base_statistics(df_base: pd.DataFrame, season_period: int = 24, max_ar_order: int = 6,
+                        calib_end: int | None = None, regime_break: str | int | None = "auto") -> dict:
+    """
+    Hiệu chỉnh DGP nền từ dữ liệu thật.
+    - season_period: chu kỳ mùa vụ P (data_TSI_v2 có tự tương quan lag-24 ~0.70, lag-12 âm).
+    - calib_end: chỉ dùng y[:calib_end] để hiệu chỉnh (None = toàn bộ). Dùng khi muốn loại đoạn dữ liệu nghi vấn.
+    - regime_break: 'auto' (ước lượng tau), t cố định, hoặc None (một chế độ nhiễu như thiết kế cũ).
+    """
+    y_all = df_base["Quantity"].to_numpy(dtype=float)
+    n_all = len(y_all)
+    n_c = n_all if calib_end is None else int(calib_end)
+    y = y_all[:n_c]
+    t = np.arange(n_c)
     month_idx = pd.to_datetime(df_base["Month"]).dt.month.to_numpy()
+    tau = detect_regime_break(y, season_period) if regime_break == "auto" else regime_break
 
-    mean = float(np.mean(quantity))
-    std = float(np.std(quantity, ddof=1))
+    # (a) Trend + Fourier: chọn K theo BIC
+    best = None
+    for K in range(0, season_period // 2 + 1):
+        X = fourier_design(t, season_period, K)
+        beta, _, _, neg2ll = _fit_mean(X, y, tau)
+        bic = neg2ll + X.shape[1] * np.log(n_c)
+        if best is None or bic < best[0]:
+            best = (bic, K, beta)
+    _, K, beta = best
+    X = fourier_design(t, season_period, K)
+    beta, s_pre, s_post, _ = _fit_mean(X, y, tau)
+    u = y - X @ beta
+    is_pre = np.zeros(n_c, dtype=bool) if tau is None else t < tau
+    u_scale = np.where(is_pre, s_pre, s_post)
 
-    monthly_stds = np.array([float(quantity[month_idx == m].std(ddof=1)) for m in range(1, 13)])
-    monthly_means = np.array([float(quantity[month_idx == m].mean()) for m in range(1, 13)])
+    # (b) AR(p) fit riêng từng chế độ: tự tương quan của đoạn êm không được khuếch đại đoạn ồn
+    segments = [(0, n_c)] if tau is None else [(0, tau), (tau, n_c)]
+    ar_fits = [_select_ar(u[a:b] / u_scale[a], max_ar_order) for a, b in segments]
+    sigmas, units, t_res = [], [], []
+    for (a, b), (p_i, _, res_i, _) in zip(segments, ar_fits):
+        m_i = len(res_i)
+        sigmas.append(float(np.std(res_i, ddof=1) * u_scale[a] * np.sqrt((m_i - 1) / max(m_i - p_i - 1, 1))))
+        units.append(res_i / res_i.std(ddof=0))
+        t_res.append(np.arange(a + p_i, b))
+    p, phi, _, rho_raw = ar_fits[-1]
+    phi_pre = ar_fits[0][1]
+    sigma_pre, sigma_post = sigmas[0], sigmas[-1]
+    sigma = float(np.sqrt(sum(len(x) * s ** 2 for x, s in zip(units, sigmas)) / sum(len(x) for x in units)))
+    res_unit = np.concatenate(units)
+    t_res = np.concatenate(t_res)
+    pool = (res_unit - res_unit.mean()) / res_unit.std(ddof=0)
 
-    slope_q, inter_q, _, _, _ = stats.linregress(t, quantity)
-    residuals = quantity - (inter_q + slope_q * t)
-    slope_vol, inter_vol, _, p_vol, _ = stats.linregress(t, np.abs(residuals))
+    # (c) Pattern phương sai theo tháng (cho S2) trên phần dư đã khử chế độ, chuẩn hóa mean(h^2) = 1
+    res_months = month_idx[:n_c][t_res]
+    rms =np.array([np.sqrt(np.mean(res_unit[res_months == mth] ** 2)) if np.any(res_months == mth) else np.nan
+                    for mth in range(1, 13)])
+    rms = np.where(np.isnan(rms), np.nanmean(rms), rms)
+    monthly_scale = rms / np.sqrt(np.mean(rms ** 2))
 
-    X_harm = harmonic_design(n)
-    beta_harm, _, _, _ = np.linalg.lstsq(X_harm, quantity, rcond=None)
-
-    z_promo = detrended_promo_driver(df_base["PromotionAmount"].to_numpy(dtype=float))
-
+    var_y = float(np.var(y, ddof=1))
     return {
-        "n": n,
-        "mean": mean,
-        "std": std,
+        "n": n_all,
+        "calib_n": n_c,
+        "mean": float(np.mean(y_all)),
+        "std": float(np.std(y_all, ddof=1)),
         "start_month": int(month_idx[0]),
         "month_idx": month_idx,
-        "monthly_stds": monthly_stds,
-        "monthly_means": monthly_means,
-        "slope_vol": float(slope_vol),
-        "inter_vol": float(inter_vol),
-        "beta_harm": beta_harm,
-        "X_harm": X_harm,
-        "z_promo": z_promo,
-        "skewness": float(stats.skew(quantity, bias=False)),
-        "kurtosis": float(stats.kurtosis(quantity, fisher=True, bias=False)),
+        "season_period": int(season_period),
+        "n_harmonics": int(K),
+        "beta": beta,
+        "trend_slope": float(beta[1]),
+        "ar_order": int(p),
+        "phi": phi,
+        "phi_pre": phi_pre,
+        "ar_spectral_radius_raw": rho_raw,
+        "ar_spectral_radius": _spectral_radius(phi),
+        "sigma": sigma,
+        "regime_break": None if tau is None else int(tau),
+        "sigma_pre": sigma_pre,
+        "sigma_post": sigma_post,
+        "innov_pool": pool,
+        "monthly_scale": monthly_scale,
+        "r2_deterministic": float(1.0 - np.var(u, ddof=1) / var_y),
+        "r2_total": float(1.0 - sigma ** 2 / var_y),
+        "z_promo": detrended_promo_driver(df_base["PromotionAmount"].to_numpy(dtype=float)),
+        "skewness": float(stats.skew(y_all, bias=False)),
+        "kurtosis": float(stats.kurtosis(y_all, fisher=True, bias=False)),
     }
 
 
-def match_moments_params(x: np.ndarray, target_mean: float, target_std: float):
-    """Chuẩn hóa affine; trả về (x_matched, m, s) với m, s là mean/std mẫu của x trước khi co giãn."""
-    m = float(np.mean(x))
-    s = float(np.std(x, ddof=1) + 1e-12)
-    return target_mean + target_std * (x - m) / s, m, s
+def base_mean_path(n: int, base_stats: dict) -> np.ndarray:
+    X = fourier_design(np.arange(n), base_stats["season_period"], base_stats["n_harmonics"],
+                       trend_cap=base_stats["n"] - 1)
+    return X @ base_stats["beta"]
 
 
-def match_moments(x: np.ndarray, target_mean: float, target_std: float) -> np.ndarray:
-    """Chuẩn hóa Affine để Sample Mean và Sample Std khớp chính xác với dữ liệu gốc."""
-    return match_moments_params(x, target_mean, target_std)[0]
+# ==============================================================================
+# 2. LÕI MÔ PHỎNG
+# ==============================================================================
 
-
-def _finish(raw, base_stats, meta, mixture=None, fleishman=None):
-    """
-    Matching + clip + ghi meta cho Oracle.
-    mixture = (w, mu, sd), mỗi mảng shape (K, n): raw ~ sum_k w_k * N(mu_k, sd_k^2) tại từng t.
-    fleishman = (a, b, c, d): raw = a + b Z + c Z^2 + d Z^3.
-    """
-    q, m, s = match_moments_params(raw, base_stats["mean"], base_stats["std"])
-    n_clipped = int(np.sum(q < 0.0))
+def _simulate_core(m_t: np.ndarray, scale_t: np.ndarray, eps: np.ndarray, eps_burn: np.ndarray,
+                   phi_post: np.ndarray, phi_pre: np.ndarray, tau: int | None, burn_scale: float):
+    """Chạy AR với hệ số phi_pre trước tau, phi_post từ tau (burn-in thuộc chế độ đầu). Trả về (y, cond_mean, n_clipped)."""
+    n, nb = len(m_t), len(eps_burn)
+    switch = 0 if tau is None else nb + tau
+    shocks = np.concatenate([eps_burn * burn_scale, eps * scale_t])
+    u = np.zeros(nb + n)
+    cond = np.zeros(nb + n)
+    for i in range(nb + n):
+        phi = phi_pre if i < switch else phi_post
+        if len(phi):
+            lags = u[max(0, i - len(phi)):i][::-1]
+            cond[i] = float(phi[:len(lags)] @ lags)
+        u[i] = cond[i] + shocks[i]
+    y_raw = m_t + u[nb:]
+    n_clipped = int(np.sum(y_raw < 0.0))
     if n_clipped:
-        warnings.warn(f"{n_clipped} giá trị âm bị clip về 0 sau moment matching "
-                      f"(mean/std mẫu sẽ lệch nhẹ so với dữ liệu gốc).", RuntimeWarning)
-    if meta is not None:
-        meta.update(m=m, s=s, n_clipped=n_clipped, mixture=mixture, fleishman=fleishman)
-    return np.clip(q, a_min=0.0, a_max=None)
+        warnings.warn(f"{n_clipped} giá trị âm bị clip về 0.", RuntimeWarning)
+    return np.maximum(y_raw, 0.0), m_t + cond[nb:], n_clipped
 
 
-# ==============================================================================
-# 2. HỆ THỐNG FLEISHMAN CHO KỊCH BẢN S3
-# ==============================================================================
-
-def fleishman_coefficients(skew: float, excess_kurt: float) -> tuple[float, float, float, float]:
-    """
-    Giải hệ Fleishman (1978): Y = a + b*Z + c*Z^2 + d*Z^3, Z ~ N(0,1), a = -c.
-    """
-    def equations(p):
-        b, c, d = p
-        eq1 = b**2 + 6.0*b*d + 2.0*c**2 + 15.0*d**2 - 1.0
-        eq2 = 2.0*c*(b**2 + 24.0*b*d + 105.0*d**2 + 2.0) - skew
-        eq3 = 24.0*(b*d + c**2*(1.0 + b**2 + 28.0*b*d) + d**2*(12.0 + 48.0*b*d + 141.0*c**2 + 225.0*d**2)) - excess_kurt
-        return [eq1, eq2, eq3]
-
-    sol = optimize.root(equations, [1.0, skew / 6.0, excess_kurt / 24.0], method="hybr")
-    if not sol.success:
-        sol = optimize.root(equations, [0.85, 0.15, 0.05], method="lm")
-    b, c, d = sol.x
-    return -c, b, c, d
-
-
-# ==============================================================================
-# 3. ĐỊNH NGHĨA 6 KỊCH BẢN MÔ PHỎNG
-# ==============================================================================
-
-def simulate_scenario_1(n_samples: int, base_stats: dict, seed: int = 42, meta: dict | None = None) -> np.ndarray:
-    """Kịch bản 1: X_t ~ N(mu, sigma^2) i.i.d."""
-    np.random.seed(seed)
-    mu, sigma = base_stats["mean"], base_stats["std"]
-    raw = np.random.normal(loc=mu, scale=sigma, size=n_samples)
-    mixture = (np.ones((1, n_samples)), np.full((1, n_samples), mu), np.full((1, n_samples), sigma))
-    return _finish(raw, base_stats, meta, mixture=mixture)
-
-
-def simulate_scenario_2(n_samples: int, base_stats: dict, seed: int = 42,
-                        meta: dict | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Kịch bản 2: Dị phương sai (std theo tháng thật) + decay biên độ tuyến tính theo thời gian.
-    Đúng với mọi n_samples (chỉ số tháng suy ra từ tháng bắt đầu của dữ liệu gốc).
-    """
-    np.random.seed(seed)
-    t = np.arange(n_samples)
-    month_idx = month_index(n_samples, base_stats["start_month"])
-
-    vol_decay = 1.0 + (base_stats["slope_vol"] / base_stats["inter_vol"]) * (t - np.mean(t))
-    vol_decay = np.maximum(0.25, vol_decay)
-    sigma_t = base_stats["monthly_stds"][month_idx - 1] * vol_decay
-
-    raw = np.random.normal(loc=base_stats["mean"], scale=sigma_t)
-    mixture = (np.ones((1, n_samples)), np.full((1, n_samples), base_stats["mean"]), sigma_t[None, :])
-    return _finish(raw, base_stats, meta, mixture=mixture), sigma_t
-
-
-def simulate_scenario_3(n_samples: int, base_stats: dict, seed: int = 42,
-                        target_skew: float = 1.0, target_excess_kurt: float = 2.0,
-                        meta: dict | None = None) -> np.ndarray:
-    """Kịch bản 3: Lệch / nặng đuôi, điều khiển bằng Fleishman (target skew=1.0, excess kurt=2.0)."""
-    np.random.seed(seed)
-    a, b, c, d = fleishman_coefficients(skew=target_skew, excess_kurt=target_excess_kurt)
-    z = np.random.normal(0.0, 1.0, size=n_samples)
-    y = a + b * z + c * (z**2) + d * (z**3)
-    return _finish(y, base_stats, meta, fleishman=(a, b, c, d))
-
-
-def _sample_regimes_min_dwell(n: int, P: np.ndarray, min_dwell: int, max_tries: int = 1000) -> np.ndarray:
-    """
-    Semi-Markov: mỗi lần vào một regime thì ở lại ít nhất `min_dwell` tháng LIÊN TỤC,
-    phần dư ~ Geometric(1 - P[k,k]) (giữ nhịp ở lại của ma trận P gốc); khi rời thì
-    chuyển sang regime khác theo P đã chuẩn hóa phần ngoài đường chéo.
-    Yêu cầu thêm: mỗi regime xuất hiện tổng cộng >= min_dwell tháng. (Đoạn cuối có thể bị cắt bởi n.)
-    """
-    off = P.copy()
-    np.fill_diagonal(off, 0.0)
-    off = off / off.sum(axis=1, keepdims=True)
-    for _ in range(max_tries):
-        regimes = np.empty(n, dtype=int)
-        i = 0
-        curr = np.random.choice([0, 1, 2], p=[0.5, 0.25, 0.25])
-        while i < n:
-            stay = min_dwell + np.random.geometric(1.0 - P[curr, curr]) - 1
-            regimes[i:i + stay] = curr
-            i += stay
-            curr = np.random.choice([0, 1, 2], p=off[curr])
-        if np.bincount(regimes, minlength=3).min() >= min_dwell:
-            return regimes
-    raise RuntimeError("Không sinh được đường đi regime thỏa ràng buộc; giảm min_regime_len hoặc tăng n_samples.")
-
-
-def simulate_scenario_4(n_samples: int, base_stats: dict, seed: int = 42,
-                        min_regime_len: int = 18, meta: dict | None = None) -> tuple[np.ndarray, dict]:
-    """
-    Kịch bản 4: Regime shift mean + variance, 3 regime (nominal, TRƯỚC matching):
-        Normal: Mean = 1.00*mu, Std = 0.75*sigma | Crisis: 0.75*mu, 1.40*sigma | Boom: 1.25*mu, 0.90*sigma
-    - Thời gian lưu liên tục tối thiểu min_regime_len tháng cho mỗi lần vào regime.
-    - Làm mượt biên bằng trung bình trượt 3 tháng (không phải linear ramp đúng nghĩa).
-    - regime_stats báo cáo tham số THỰC sau co giãn (khác nominal).
-    - Oracle cho S4 là oracle "biết regime": điều kiện theo mu_smooth/sd_smooth của từng tháng.
-    """
-    np.random.seed(seed)
-    mu, sigma = base_stats["mean"], base_stats["std"]
-
-    means = np.array([mu * 1.00, mu * 0.75, mu * 1.25])
-    sigmas = np.array([sigma * 0.75, sigma * 1.40, sigma * 0.90])
-    P = np.array([[0.92, 0.05, 0.03],
-                  [0.08, 0.88, 0.04],
-                  [0.06, 0.04, 0.90]])
-
-    regimes = _sample_regimes_min_dwell(n_samples, P, min_regime_len)
-
-    mu_smooth = pd.Series(means[regimes]).rolling(window=3, min_periods=1, center=True).mean().to_numpy()
-    sig_smooth = pd.Series(sigmas[regimes]).rolling(window=3, min_periods=1, center=True).mean().to_numpy()
-
-    raw = np.random.normal(loc=mu_smooth, scale=sig_smooth)
-    mixture = (np.ones((1, n_samples)), mu_smooth[None, :], sig_smooth[None, :])
-    q = _finish(raw, base_stats, meta, mixture=mixture)
-    if meta is not None:
-        meta["regimes"] = regimes
-
-    regime_stats = {}
-    for k, name in [(0, "Normal"), (1, "Crisis"), (2, "Boom")]:
-        mask = (regimes == k)
-        regime_stats[name] = {
-            "count": int(np.sum(mask)),
-            "pct": float(np.sum(mask) / n_samples),
-            "mean": float(np.mean(q[mask])),
-            "std": float(np.std(q[mask], ddof=1)) if np.sum(mask) > 1 else 0.0,
-            "mean_ratio": float(np.mean(q[mask]) / mu),
-            "std_ratio": float(np.std(q[mask], ddof=1) / sigma) if np.sum(mask) > 1 else 0.0,
-        }
-    return q, regime_stats
-
-
-def simulate_scenario_5(n_samples: int, base_stats: dict, seed: int = 42,
-                        noise_scale: float = 1.0, meta: dict | None = None) -> np.ndarray:
-    """
-    Kịch bản 5: Trend + Seasonality (12 & 4 tháng) + cú sốc hiếm (p=0.025; -2.0*sigma / +2.5*sigma).
-    Lưu ý: noise_scale=0.90 khiến raw std ~0.93*target nên matching phóng tín hiệu ~7%.
-    Đặt noise_scale=1.0 nếu muốn biên độ mùa vụ sát hồi quy gốc (sẽ đổi dữ liệu S5).
-    Đúng với mọi n_samples (harmonic dựng lại theo t; trend ngoại suy tuyến tính).
-    """
-    np.random.seed(seed)
-    t = np.arange(n_samples)
-    beta = base_stats["beta_harm"]
-    X_harm = harmonic_design(n_samples)
-
-    signal = beta[1] * (t - np.mean(t)) + (X_harm[:, 2:] @ beta[2:])
-    var_signal = np.var(signal, ddof=1)
-
-    p_shock = 0.025
-    shock_mask = np.random.binomial(1, p_shock, size=n_samples)
-    shock_signs = np.random.choice([-2.0, 2.5], size=n_samples, p=[0.5, 0.5])
-    shocks = shock_mask * shock_signs * base_stats["std"]
-    var_shocks = np.var(shocks, ddof=1)
-
-    var_noise = max(1.0, base_stats["std"]**2 - var_signal - var_shocks)
-    noise_sd = np.sqrt(var_noise) * noise_scale
-    noise = np.random.normal(0, noise_sd, size=n_samples)
-
-    raw = signal + noise + shocks
-
-    # Phân phối raw tại mỗi t: hỗn hợp 3 thành phần (không sốc / sốc âm / sốc dương)
-    sg = base_stats["std"]
-    w = np.vstack([np.full(n_samples, 1.0 - p_shock), np.full(n_samples, p_shock / 2), np.full(n_samples, p_shock / 2)])
-    mu_k = np.vstack([signal, signal - 2.0 * sg, signal + 2.5 * sg])
-    sd_k = np.full((3, n_samples), noise_sd)
-    return _finish(raw, base_stats, meta, mixture=(w, mu_k, sd_k))
-
-
-def simulate_scenario_6(df_base: pd.DataFrame, n_samples: int, base_stats: dict, seed: int = 42,
-                        meta: dict | None = None) -> tuple[np.ndarray, float]:
-    """
-    Kịch bản 6: Mixture hai đỉnh, pi_high = 0.35 + 0.25*tanh(z_promo) (z_promo = PromotionAmount đã khử trend).
-    mu_low = mu - 0.55*sigma (sd 0.45*sigma); mu_high = mu + 0.95*sigma (sd 0.55*sigma).
-    Khi n_samples > số dòng gốc, driver tính lại từ df_base (bảng ngoại sinh đã mở rộng).
-    """
-    np.random.seed(seed)
-    mu, sigma = base_stats["mean"], base_stats["std"]
-
-    if n_samples <= base_stats["n"]:
-        z_promo = base_stats["z_promo"][:n_samples]
+def _driver_series(df_template: pd.DataFrame, n: int, base_stats: dict, lag: int) -> np.ndarray:
+    if n <= base_stats["n"]:
+        z = base_stats["z_promo"][:n]
     else:
-        assert len(df_base) >= n_samples, "df_base phải có ít nhất n_samples dòng (dùng bảng đã mở rộng)."
-        z_promo = detrended_promo_driver(df_base["PromotionAmount"].to_numpy(dtype=float)[:n_samples])
+        assert len(df_template) >= n, "df_template phải có ít nhất n dòng (dùng bảng ngoại sinh đã mở rộng)."
+        z = detrended_promo_driver(df_template["PromotionAmount"].to_numpy(dtype=float)[:n])
+    g = np.tanh(z)
+    g = (g - g.mean()) / (g.std() + 1e-12)
+    out = np.zeros(n)
+    out[lag:] = g[:n - lag] if lag > 0 else g
+    return out
 
-    pi_high = np.clip(0.35 + 0.25 * np.tanh(z_promo), 0.10, 0.60)
 
-    mu_low, sigma_low = mu - 0.55 * sigma, 0.45 * sigma
-    mu_high, sigma_high = mu + 0.95 * sigma, 0.55 * sigma
+def simulate_by_key(key: str, df_template: pd.DataFrame, n: int, base_stats: dict, seed: int = 42,
+                    meta: dict | None = None, **overrides):
+    """
+    Sinh một realization của kịch bản `key`. Trả về (y, extra):
+      extra = None | {"break_t", "shift"} (s4) | {"break_t", "slope_change"} (s5) | {"exog_r2"} (s6) | {...}
+    Nếu `meta` là dict, hàm điền thông tin cần cho OracleDGP.
+    """
+    if key not in SCENARIO_KEYS:
+        raise ValueError(f"Kịch bản không hợp lệ: {key}")
+    prm = {**DEFAULT_SCENARIO_PARAMS, **overrides}
+    rng_noise = np.random.default_rng([seed, 0])
+    rng_scn = np.random.default_rng([seed, 1])
 
-    is_high = np.random.rand(n_samples) < pi_high
-    raw = np.where(
-        is_high,
-        np.random.normal(mu_high, sigma_high, size=n_samples),
-        np.random.normal(mu_low, sigma_low, size=n_samples),
-    )
-    mixture = (
-        np.vstack([pi_high, 1.0 - pi_high]),
-        np.vstack([np.full(n_samples, mu_high), np.full(n_samples, mu_low)]),
-        np.vstack([np.full(n_samples, sigma_high), np.full(n_samples, sigma_low)]),
-    )
-    q = _finish(raw, base_stats, meta, mixture=mixture)
-    return q, float(np.mean(pi_high))
+    k = float(prm["noise_scale"])
+    sigma_t = sigma_path(n, base_stats) * k
+    m_t = base_mean_path(n, base_stats).copy()
+    s_t = np.ones(n)
+    pool = base_stats["innov_pool"]
+    extra = None
 
+    if key == "s3":
+        nu = float(prm["t_df"])
+        c = np.sqrt((nu - 2.0) / nu)
+        eps_burn = rng_noise.standard_t(nu, size=BURN_IN) * c
+        eps = rng_noise.standard_t(nu, size=n) * c
+        innov = ("t", nu)
+    else:
+        eps_burn = rng_noise.choice(pool, size=BURN_IN, replace=True)
+        eps = rng_noise.choice(pool, size=n, replace=True)
+        innov = ("empirical", pool)
+
+    if key == "s2":
+        h = base_stats["monthly_scale"] ** float(prm["hetero_power"])
+        h = h / np.sqrt(np.mean(h ** 2))
+        s_t = h[month_index(n, base_stats["start_month"]) - 1]
+        extra = {"max_min_ratio": float(h.max() / h.min())}
+
+    elif key == "s4":
+        lo, hi = prm["shift_window"]
+        tau = int(rng_scn.integers(int(lo * n), max(int(hi * n), int(lo * n) + 1)))
+        delta = float(rng_scn.choice([-1.0, 1.0]) * rng_scn.uniform(*prm["shift_frac"]) * base_stats["mean"])
+        m_t[tau:] += delta
+        extra = {"break_t": tau, "shift": delta}
+
+    elif key == "s5":
+        lo, hi = prm["break_window"]
+        tau = int(rng_scn.integers(int(lo * n), max(int(hi * n), int(lo * n) + 1)))
+        d_slope = float(rng_scn.choice([-1.0, 1.0]) * rng_scn.uniform(*prm["slope_frac"]) * base_stats["mean"])
+        m_t += d_slope * np.maximum(0, np.arange(n) - tau)
+        extra = {"break_t": tau, "slope_change": d_slope}
+
+    elif key == "s6":
+        beta = float(prm["exog_beta"])
+        drv = _driver_series(df_template, n, base_stats, int(prm["exog_lag"]))
+        m_t += beta * sigma_t * drv
+        extra = {"exog_beta": beta, "exog_share_of_innov_var": beta ** 2 / (1.0 + beta ** 2)}
+
+    scale_t = sigma_t * s_t
+    tau = base_stats["regime_break"]
+    burn_scale = float(np.mean(scale_t[:tau or n]))
+    y, cond_mean, n_clipped = _simulate_core(m_t, scale_t, eps, eps_burn, base_stats["phi"], base_stats["phi_pre"],
+                                             tau, burn_scale)
+
+    if meta is not None:
+        meta.update(key=key, n=n, cond_mean=cond_mean, scale=scale_t, innov=innov,
+                    n_clipped=n_clipped, params=prm, extra=extra)
+    return y, extra
+
+
+# ==============================================================================
+# 3. ORACLE: DỰ BÁO MỘT BƯỚC TỐI ƯU THEO ĐÚNG DGP
+# ==============================================================================
+
+def innovation_quantile(innov: tuple, tau: float) -> float:
+    kind, val = innov
+    if kind == "t":
+        nu = float(val)
+        return float(stats.t.ppf(tau, nu) * np.sqrt((nu - 2.0) / nu))
+    return float(np.quantile(val, tau, method="inverted_cdf"))
+
+
+class OracleDGP:
+    """
+    Oracle một bước: biết tham số DGP, quan sát quá khứ thật.
+    forecast_path(meta, quantiles) -> {"mean": (n,), "P5": (n,), ...} cho mọi t.
+    """
+    def __init__(self, df_base: pd.DataFrame | None = None):
+        pass
+
+    @staticmethod
+    def forecast_path(meta: dict, quantiles: tuple = (0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95)) -> dict:
+        cm, sc = meta["cond_mean"], meta["scale"]
+        out = {"mean": cm.copy()}
+        for tau in quantiles:
+            out[f"P{int(round(tau * 100))}"] = np.maximum(cm + sc * innovation_quantile(meta["innov"], tau), 0.0)
+        return out
+
+
+# ==============================================================================
+# 4. ĐẶC TẢ KỊCH BẢN (SINH TỪ THAM SỐ HIỆU CHỈNH THẬT -> KHÔNG LỆCH VỚI CODE)
+# ==============================================================================
+
+def scenario_specifications(base_stats: dict, **overrides) -> dict:
+    prm = {**DEFAULT_SCENARIO_PARAMS, **overrides}
+    bs = base_stats
+    k = prm["noise_scale"]
+    h = bs["monthly_scale"] ** prm["hetero_power"]
+    h = h / np.sqrt(np.mean(h ** 2))
+    base_params = {
+        "season_period_P": bs["season_period"],
+        "n_harmonics_K (BIC)": bs["n_harmonics"],
+        "trend_slope": f"{bs['trend_slope']:,.1f} / tháng",
+        "ar_order_p (BIC)": bs["ar_order"],
+        "phi": [round(float(x), 3) for x in bs["phi"]],
+        "ar_spectral_radius": round(bs["ar_spectral_radius"], 3),
+        "regime_break_tau": bs["regime_break"] if bs["regime_break"] is not None else "không (một chế độ)",
+        "phi_pre (trước tau)": [round(float(x), 3) for x in bs["phi_pre"]],
+        "sigma_innov_pre": f"{bs['sigma_pre']:,.0f} (x noise_scale={k})",
+        "sigma_innov_post": f"{bs['sigma_post']:,.0f} (x noise_scale={k})",
+        "R2_deterministic / R2_total (calib)": f"{bs['r2_deterministic']:.2f} / {bs['r2_total']:.2f}",
+        "calibration_sample": f"y[0:{bs['calib_n']}]",
+    }
+    base_formula = (r"y_t=\max(0,m_t+u_t),\ m_t=a+bt+\sum_{k\le K}[c_k\sin\tfrac{2\pi kt}{P}+d_k\cos\tfrac{2\pi kt}{P}],"
+                    r"\ u_t=\sum_{j\le p}\phi_j u_{t-j}+k\sigma_t s_t\varepsilon_t,"
+                    r"\ \sigma_t=\sigma_{\text{pre}}\mathbb 1[t<\tau_\sigma]+\sigma_{\text{post}}\mathbb 1[t\ge\tau_\sigma]")
+    return {
+        "s1": {"name": SCENARIO_NAMES["s1"], "dgp_formula": base_formula + r",\ \varepsilon_t\sim\hat F_{\text{resid}}",
+               "parameters": base_params,
+               "rationale": "Kịch bản nền tái tạo cấu trúc trend/mùa vụ/tự tương quan của dữ liệu thật; "
+                            "đo năng lực khai thác cấu trúc động khi nhiễu có hình dạng thực tế."},
+        "s2": {"name": SCENARIO_NAMES["s2"], "dgp_formula": r"\text{Base},\ s_t=h_{\text{month}(t)}^{\gamma}",
+               "parameters": {"gamma (hetero_power)": prm["hetero_power"],
+                              "max/min scale ratio": round(float(h.max() / h.min()), 2)},
+               "rationale": "Kiểm tra khả năng co giãn độ rộng khoảng phân vị theo tháng."},
+        "s3": {"name": SCENARIO_NAMES["s3"], "dgp_formula": r"\text{Base},\ \varepsilon_t\sim t_\nu\sqrt{(\nu-2)/\nu}",
+               "parameters": {"nu (t_df)": prm["t_df"]},
+               "rationale": "Kiểm tra độ vững của phân vị đuôi (P5/P95) và chi phí tồn kho khi nhiễu đuôi dày."},
+        "s4": {"name": SCENARIO_NAMES["s4"], "dgp_formula": r"\text{Base},\ m_t\mathrel{+}=\delta\,\mathbb 1[t\ge\tau]",
+               "parameters": {"|delta| / mean": prm["shift_frac"], "tau / n": prm["shift_window"],
+                              "sign": "ngẫu nhiên ±"},
+               "rationale": "Concept drift xảy ra trong giai đoạn test; đo khả năng thích ứng (vd. RevIN) khi mức nhu cầu đổi đột ngột."},
+        "s5": {"name": SCENARIO_NAMES["s5"], "dgp_formula": r"\text{Base},\ m_t\mathrel{+}=\Delta_b\max(0,t-\tau)",
+               "parameters": {"|Delta_b| / mean per month": prm["slope_frac"], "tau / n": prm["break_window"],
+                              "sign": "ngẫu nhiên ±"},
+               "rationale": "Gãy trend quanh ranh giới train/val: mô hình phải ngoại suy độ dốc mới."},
+        "s6": {"name": SCENARIO_NAMES["s6"],
+               "dgp_formula": r"\text{Base},\ m_t\mathrel{+}=\beta k\sigma_t\,\tilde g(z_{t-\ell}),\ \tilde g=\text{std}(\tanh z)",
+               "parameters": {"beta (exog_beta)": prm["exog_beta"], "lag": prm["exog_lag"],
+                              "driver": "PromotionAmount khử trend tuyến tính, chuẩn hóa median/IQR",
+                              "share of innovation variance": round(prm["exog_beta"] ** 2 / (1 + prm["exog_beta"] ** 2), 2)},
+               "rationale": "Đo lợi ích của mixing đa biến: chỉ mô hình nhìn thấy biến ngoại sinh trễ mới khai thác được phần tín hiệu này."},
+    }
+
+
+# ==============================================================================
+# 5. KIỂM CHỨNG: ĐỘ TRUNG THỰC SO VỚI DỮ LIỆU THẬT + ĐỘ CHUẨN CỦA ORACLE
+# ==============================================================================
+
+def _acf(y: np.ndarray, lag: int) -> float:
+    return float(pd.Series(y).autocorr(lag))
+
+
+def _linear_ar_test_mae(y: np.ndarray, p: int = 24, test_start: int = 96) -> float:
+    """MAE một bước của AR(p) tuyến tính fit trên y[:test_start] -> đo 'độ dễ dự báo' tuyến tính."""
+    X = np.array([np.r_[1.0, y[k - p:k]] for k in range(p, len(y))])
+    T = y[p:]
+    ntr = test_start - p
+    b = np.linalg.lstsq(X[:ntr], T[:ntr], rcond=None)[0]
+    return float(np.mean(np.abs(X[ntr:] @ b - T[ntr:])))
+
+
+def run_monte_carlo_validation(df_base: pd.DataFrame, n_seeds: int = 100, base_stats: dict | None = None, **overrides):
+    bs = base_stats or get_base_statistics(df_base)
+    n = len(df_base)
+    y_real = df_base["Quantity"].to_numpy(dtype=float)
+    ts = slice(int(0.8 * n), n)
+
+    hdr = (f"{'Kịch bản':<44} | {'Mean':>8} | {'Std':>7} | {'ACF1':>5} | {'ACF12':>5} | {'ACF24':>5} | "
+           f"{'AR24-MAE':>8} | {'Orc-MAE':>7} | {'Cov90':>5} | {'Cov50':>5} | Clip")
+    print("=" * len(hdr))
+    print(f"MONTE CARLO VALIDATION ({n_seeds} seeds, N={n}) | P={bs['season_period']} K={bs['n_harmonics']} "
+          f"p={bs['ar_order']} tau={bs['regime_break']} sigma_pre={bs['sigma_pre']:,.0f} "
+          f"sigma_post={bs['sigma_post']:,.0f} R2_total={bs['r2_total']:.2f}")
+    print("=" * len(hdr))
+    print(hdr)
+    print("-" * len(hdr))
+    print(f"{'REAL data_TSI_v2':<44} | {y_real.mean():>8,.0f} | {y_real.std(ddof=1):>7,.0f} | "
+          f"{_acf(y_real, 1):>5.2f} | {_acf(y_real, 12):>5.2f} | {_acf(y_real, 24):>5.2f} | "
+          f"{_linear_ar_test_mae(y_real):>8,.0f} | {'-':>7} | {'-':>5} | {'-':>5} | -")
+
+    rows = {}
+    for key in SCENARIO_KEYS:
+        acc = {c: [] for c in ("mean", "std", "a1", "a12", "a24", "ar", "orc", "c90", "c50")}
+        clipped = 0
+        for s in range(n_seeds):
+            meta = {}
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                y, _ = simulate_by_key(key, df_base, n, bs, seed=s, meta=meta, **overrides)
+            orc = OracleDGP.forecast_path(meta, (0.05, 0.25, 0.50, 0.75, 0.95))
+            acc["mean"].append(y.mean()); acc["std"].append(y.std(ddof=1))
+            acc["a1"].append(_acf(y, 1)); acc["a12"].append(_acf(y, 12)); acc["a24"].append(_acf(y, 24))
+            acc["ar"].append(_linear_ar_test_mae(y))
+            acc["orc"].append(np.mean(np.abs(orc["P50"][ts] - y[ts])))
+            acc["c90"].append(np.mean((y >= orc["P5"]) & (y <= orc["P95"])))
+            acc["c50"].append(np.mean((y >= orc["P25"]) & (y <= orc["P75"])))
+            clipped += int(meta["n_clipped"] > 0)
+        r = {c: float(np.mean(v)) for c, v in acc.items()}
+        rows[key] = r
+        print(f"{SCENARIO_NAMES[key]:<44} | {r['mean']:>8,.0f} | {r['std']:>7,.0f} | {r['a1']:>5.2f} | "
+              f"{r['a12']:>5.2f} | {r['a24']:>5.2f} | {r['ar']:>8,.0f} | {r['orc']:>7,.0f} | "
+              f"{r['c90']:>5.3f} | {r['c50']:>5.3f} | {clipped}/{n_seeds}")
+    print("-" * len(hdr))
+    print("AR24-MAE: MAE test của AR(24) tuyến tính fit trên 96 tháng đầu (độ dễ dự báo tuyến tính).")
+    print("Orc-MAE : MAE test của median Oracle (cận dưới). Cov90/Cov50 kỳ vọng ~0.90/~0.50.")
+    return rows
+
+
+# ==============================================================================
+# 6. SINH, LƯU TRỮ VÀ TRỰC QUAN HÓA
+# ==============================================================================
 
 def extend_exogenous_features(df_base: pd.DataFrame, n_samples: int, seed: int = 42) -> pd.DataFrame:
-    """Mở rộng chuỗi ngoại sinh khi n_samples > len(df_base)."""
-    np.random.seed(seed)
+    """Mở rộng chuỗi ngoại sinh khi n_samples > len(df_base) (lặp lại + nhiễu 1% std)."""
+    rng = np.random.default_rng(seed)
     n_base = len(df_base)
     exog_cols = [c for c in df_base.columns if c not in ("Month", "Quantity")]
     start_date = pd.to_datetime(df_base["Month"].iloc[0]) if "Month" in df_base.columns else pd.to_datetime("2015-01-01")
@@ -354,319 +563,141 @@ def extend_exogenous_features(df_base: pd.DataFrame, n_samples: int, seed: int =
     repeats = int(np.ceil(n_samples / n_base))
     for col in exog_cols:
         base_vals = df_base[col].to_numpy()
-        tiled = np.tile(base_vals, repeats)[:n_samples]
-        noise = np.random.normal(0, 0.01 * (np.std(base_vals) + 1e-8), size=n_samples)
-        df_ext[col] = tiled + noise
+        df_ext[col] = np.tile(base_vals, repeats)[:n_samples] + rng.normal(0, 0.01 * (np.std(base_vals) + 1e-8), size=n_samples)
     return df_ext
 
 
-def simulate_by_key(key: str, df_template: pd.DataFrame, n: int, base_stats: dict, seed: int = 42,
-                    meta: dict | None = None):
-    """Gọi kịch bản theo tên. Trả về (q, extra) với extra = sigma_t (s2) | regime_stats (s4) | mean pi_high (s6) | None."""
-    if key == "s1":
-        return simulate_scenario_1(n, base_stats, seed, meta=meta), None
-    if key == "s2":
-        return simulate_scenario_2(n, base_stats, seed, meta=meta)
-    if key == "s3":
-        return simulate_scenario_3(n, base_stats, seed, meta=meta), None
-    if key == "s4":
-        return simulate_scenario_4(n, base_stats, seed, meta=meta)
-    if key == "s5":
-        return simulate_scenario_5(n, base_stats, seed, meta=meta), None
-    if key == "s6":
-        return simulate_scenario_6(df_template, n, base_stats, seed, meta=meta)
-    raise ValueError(f"Kịch bản không hợp lệ: {key}")
-
-
-# ==============================================================================
-# 4. ORACLE: DỰ BÁO TỐI ƯU THEO ĐÚNG DGP CỦA DỮ LIỆU ĐÃ SINH
-# ==============================================================================
-
-def _mixture_quantile(w: np.ndarray, mu: np.ndarray, sd: np.ndarray, tau: float) -> np.ndarray:
-    """Phân vị tau của hỗn hợp Gaussian tại từng t. w, mu, sd: shape (K, n). Bisection vector hóa."""
-    if mu.shape[0] == 1:
-        return mu[0] + sd[0] * stats.norm.ppf(tau)
-    lo = np.min(mu - 12.0 * sd, axis=0)
-    hi = np.max(mu + 12.0 * sd, axis=0)
-    for _ in range(80):
-        mid = 0.5 * (lo + hi)
-        cdf = np.sum(w * stats.norm.cdf((mid[None, :] - mu) / sd), axis=0)
-        below = cdf < tau
-        lo = np.where(below, mid, lo)
-        hi = np.where(below, hi, mid)
-    return 0.5 * (lo + hi)
-
-
-class OracleDGP:
-    """
-    Dự báo tối ưu (mean + quantile) tại MỌI t, điều kiện theo thông tin mà DGP cho phép:
-      S1, S3: phân phối vô điều kiện | S2: sigma theo tháng & decay | S4: biết regime (oracle "regime-known")
-      S5: biết trend + mùa vụ, sốc hiếm là hỗn hợp | S6: biết pi_high của tháng đó (hỗn hợp hai đỉnh).
-    Phép co giãn moment matching được áp lại qua meta["m"], meta["s"], và quantile bị clip ở 0 như dữ liệu.
-    Dùng: meta = {}; y, _ = simulate_by_key("s5", df, n, stats, seed, meta=meta); oracle.forecast_path(meta)
-    """
-    def __init__(self, df_base: pd.DataFrame):
-        self.stats = get_base_statistics(df_base)
-        self.mean = self.stats["mean"]
-        self.std = self.stats["std"]
-
-    def forecast_path(self, meta: dict, quantiles: tuple = (0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95)) -> dict:
-        m, s = meta["m"], meta["s"]
-
-        def to_y(raw):
-            return self.mean + self.std * (raw - m) / s
-
-        out = {}
-        n_len = meta.get("n", self.stats.get("n", 120))
-        if meta.get("mixture") is not None:
-            n_len = meta["mixture"][0].shape[1]
-
-        if meta.get("fleishman") is not None:
-            a, b, c, d = meta["fleishman"]
-            mean_val = float(to_y(a + c))
-            out["mean"] = np.full(n_len, mean_val)
-            for tau in quantiles:
-                z = stats.norm.ppf(tau)
-                q_val = float(np.maximum(to_y(a + b * z + c * z**2 + d * z**3), 0.0))
-                out[f"P{round(tau * 100)}"] = np.full(n_len, q_val)
-        else:
-            w, mu_k, sd_k = meta["mixture"]
-            mean_arr = np.asarray(to_y(np.sum(w * mu_k, axis=0)))
-            if mean_arr.ndim == 0:
-                mean_arr = np.full(n_len, float(mean_arr))
-            out["mean"] = mean_arr
-            for tau in quantiles:
-                q_arr = np.asarray(np.maximum(to_y(_mixture_quantile(w, mu_k, sd_k, tau)), 0.0))
-                if q_arr.ndim == 0:
-                    q_arr = np.full(n_len, float(q_arr))
-                out[f"P{round(tau * 100)}"] = q_arr
-        return out
-
-
-# ==============================================================================
-# 5. MONTE CARLO VALIDATION
-# ==============================================================================
-
-def run_monte_carlo_validation(df_base: pd.DataFrame, n_seeds: int = 100):
-    """
-    Kiểm tra độ ổn định thống kê và độ chuẩn của Oracle trên nhiều seed.
-    Cover90/Cover50: tỷ lệ y nằm trong [P5,P95] / [P25,P75] của Oracle (kỳ vọng ~0.90 / ~0.50).
-    Mean/Std luôn khớp tuyệt đối do exact moment matching nên chỉ để kiểm tra clip.
-    """
-    base_stats = get_base_statistics(df_base)
-    oracle = OracleDGP(df_base)
-    n = len(df_base)
-    print("=" * 112)
-    print(f"MONTE CARLO VALIDATION TRÊN {n_seeds} SEEDS (N={n})")
-    print("=" * 112)
-    print(f"{'Kịch bản':<26} | {'Mean':>10} | {'Std':>9} | {'Skewness':<13} | {'Kurtosis':<13} | {'Cover90':<7} | {'Cover50':<7} | {'Clip':<5}")
-    print("-" * 112)
-
-    for key, name in [("s1", "S1: Normal (i.i.d)"), ("s2", "S2: Heteroscedastic"), ("s3", "S3: Fleishman Skew/Kurt"),
-                      ("s4", "S4: Markov Regime Shift"), ("s5", "S5: Harmonics + Shock"), ("s6", "S6: Detrended Bimodal")]:
-        means, stds, skews, kurts, c90, c50, clipped = [], [], [], [], [], [], 0
-        for s in range(n_seeds):
-            meta = {}
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                y, _ = simulate_by_key(key, df_base, n, base_stats, seed=s, meta=meta)
-            orc = oracle.forecast_path(meta, (0.05, 0.25, 0.75, 0.95))
-            means.append(np.mean(y)); stds.append(np.std(y, ddof=1))
-            skews.append(stats.skew(y)); kurts.append(stats.kurtosis(y))
-            c90.append(np.mean((y >= orc["P5"]) & (y <= orc["P95"])))
-            c50.append(np.mean((y >= orc["P25"]) & (y <= orc["P75"])))
-            clipped += int(meta["n_clipped"] > 0)
-        print(f"{name:<26} | {np.mean(means):>10,.0f} | {np.mean(stds):>9,.0f} | "
-              f"{np.mean(skews):>5.2f}+/-{np.std(skews):<5.2f} | {np.mean(kurts):>5.2f}+/-{np.std(kurts):<5.2f} | "
-              f"{np.mean(c90):<7.3f} | {np.mean(c50):<7.3f} | {clipped}/{n_seeds}")
-    print("-" * 112)
-
-
-# ==============================================================================
-# 6. SINH VÀ LƯU TRỮ DỮ LIỆU CÙNG BIỂU ĐỒ
-# ==============================================================================
-
 def plot_simulation_comparison(df_base: pd.DataFrame, sim_dict: dict[str, np.ndarray], save_dir: Path):
-    """Vẽ biểu đồ đối chiếu chuỗi thời gian và hàm mật độ xác suất của 6 kịch bản so với dữ liệu thực."""
+    """Time series, KDE và ACF của 6 kịch bản so với dữ liệu thật."""
     save_dir.mkdir(parents=True, exist_ok=True)
     real_q = df_base["Quantity"].to_numpy(dtype=float)
     n = len(real_q)
     t = np.arange(n)
-    
-    colors = {
-        "Real Data": "#1f77b4",
-        "S1: Homoscedastic Normal": "#2ca02c",
-        "S2: Heteroscedastic": "#ff7f0e",
-        "S3: Skewed & Heavy-Tail": "#d62728",
-        "S4: Regime Shift": "#9467bd",
-        "S5: Trend + Season + Shock": "#8c564b",
-        "S6: Bimodal Mixture": "#e377c2",
-    }
-    
-    scenario_keys = [
-        ("S1: Homoscedastic Normal", "s1"),
-        ("S2: Heteroscedastic", "s2"),
-        ("S3: Skewed & Heavy-Tail", "s3"),
-        ("S4: Regime Shift", "s4"),
-        ("S5: Trend + Season + Shock", "s5"),
-        ("S6: Bimodal Mixture", "s6"),
-    ]
-    
-    # ── 1. Biểu đồ Time Series ────────────────────────────────────────────────
+    colors = ["#2ca02c", "#ff7f0e", "#d62728", "#9467bd", "#8c564b", "#e377c2"]
+
     fig, axes = plt.subplots(3, 2, figsize=(16, 12), sharex=True, sharey=True)
-    axes = axes.flatten()
-    
-    for idx, (title, key) in enumerate(scenario_keys):
-        ax = axes[idx]
-        sim_q = sim_dict[key][:n]
-        ax.plot(t, real_q, label="Real Data (Gốc)", color="gray", alpha=0.5, linestyle="--", linewidth=1.5)
-        ax.plot(t, sim_q, label=title, color=colors[title], linewidth=1.8)
-        ax.set_title(title, fontsize=12, fontweight="bold")
+    for ax, key, col in zip(axes.flatten(), SCENARIO_KEYS, colors):
+        ax.plot(t, real_q, label="Real", color="gray", alpha=0.5, linestyle="--", linewidth=1.5)
+        ax.plot(t, sim_dict[key][:n], label=SCENARIO_NAMES[key], color=col, linewidth=1.6)
+        ax.axvspan(int(0.8 * n), n, color="gray", alpha=0.08)
+        ax.set_title(SCENARIO_NAMES[key], fontsize=11, fontweight="bold")
         ax.grid(True, alpha=0.3)
-        ax.legend(loc="upper right", fontsize=9)
-        if idx >= 4:
-            ax.set_xlabel("Tháng (Timestep)", fontsize=10)
-        if idx % 2 == 0:
-            ax.set_ylabel("Quantity", fontsize=10)
-            
+        ax.legend(loc="upper right", fontsize=8)
     plt.tight_layout()
-    time_series_path = save_dir / "simulated_scenarios_time_series.png"
-    plt.savefig(time_series_path, dpi=300)
+    ts_path = save_dir / "simulated_scenarios_time_series.png"
+    plt.savefig(ts_path, dpi=200)
     plt.close()
-    
-    # ── 2. Biểu đồ Phân phối Mật độ (KDE Distribution) ─────────────────────────
+
     fig, axes = plt.subplots(3, 2, figsize=(16, 12))
-    axes = axes.flatten()
-    
-    x_grid = np.linspace(min(real_q.min(), 50000), max(real_q.max(), 700000), 500)
+    lo = min(real_q.min(), min(v.min() for v in sim_dict.values()))
+    hi = max(real_q.max(), max(v.max() for v in sim_dict.values()))
+    x_grid = np.linspace(lo, hi, 400)
     kde_real = stats.gaussian_kde(real_q)(x_grid)
-    
-    for idx, (title, key) in enumerate(scenario_keys):
-        ax = axes[idx]
+    for ax, key, col in zip(axes.flatten(), SCENARIO_KEYS, colors):
         sim_q = sim_dict[key][:n]
         kde_sim = stats.gaussian_kde(sim_q)(x_grid)
-        
-        ax.plot(x_grid, kde_real, label="Real Data KDE", color="gray", linestyle="--", linewidth=2)
-        ax.fill_between(x_grid, 0, kde_sim, label=f"{title} KDE", color=colors[title], alpha=0.35)
-        ax.plot(x_grid, kde_sim, color=colors[title], linewidth=2)
-        
-        skew_val = stats.skew(sim_q)
-        kurt_val = stats.kurtosis(sim_q)
-        ax.text(0.05, 0.85, f"Mean: {sim_q.mean():,.0f}\nStd : {np.std(sim_q, ddof=1):,.0f}\nSkew: {skew_val:.2f}\nKurt: {kurt_val:.2f}",
+        ax.plot(x_grid, kde_real, label="Real KDE", color="gray", linestyle="--", linewidth=2)
+        ax.fill_between(x_grid, 0, kde_sim, color=col, alpha=0.35, label="Sim KDE")
+        ax.text(0.03, 0.80, f"Mean: {sim_q.mean():,.0f}\nStd : {sim_q.std(ddof=1):,.0f}\n"
+                            f"Skew: {stats.skew(sim_q):.2f}\nKurt: {stats.kurtosis(sim_q):.2f}",
                 transform=ax.transAxes, fontsize=9, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
-        
-        ax.set_title(title, fontsize=12, fontweight="bold")
+        ax.set_title(SCENARIO_NAMES[key], fontsize=11, fontweight="bold")
         ax.grid(True, alpha=0.3)
-        ax.legend(loc="upper right", fontsize=9)
-        ax.set_xlabel("Quantity", fontsize=10)
-        ax.set_ylabel("Mật độ xác suất (Density)", fontsize=10)
-        
+        ax.legend(loc="upper right", fontsize=8)
     plt.tight_layout()
     dist_path = save_dir / "simulated_scenarios_distributions.png"
-    plt.savefig(dist_path, dpi=300)
+    plt.savefig(dist_path, dpi=200)
     plt.close()
-    
-    print(f"[OK] Đã lưu biểu đồ Time Series : {time_series_path}")
-    print(f"[OK] Đã lưu biểu đồ Distribution: {dist_path}")
+
+    lags = np.arange(1, 37)
+    fig, axes = plt.subplots(3, 2, figsize=(16, 11), sharex=True, sharey=True)
+    acf_real = [_acf(real_q, L) for L in lags]
+    for ax, key, col in zip(axes.flatten(), SCENARIO_KEYS, colors):
+        ax.bar(lags - 0.2, acf_real, width=0.4, color="gray", alpha=0.6, label="Real")
+        ax.bar(lags + 0.2, [_acf(sim_dict[key][:n], L) for L in lags], width=0.4, color=col, label="Sim")
+        ax.axhline(1.96 / np.sqrt(n), color="k", lw=0.6, ls=":")
+        ax.axhline(-1.96 / np.sqrt(n), color="k", lw=0.6, ls=":")
+        ax.set_title(SCENARIO_NAMES[key], fontsize=11, fontweight="bold")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="upper right", fontsize=8)
+    plt.tight_layout()
+    acf_path = save_dir / "simulated_scenarios_acf.png"
+    plt.savefig(acf_path, dpi=200)
+    plt.close()
+
+    print(f"[OK] Time series : {ts_path}")
+    print(f"[OK] Distribution: {dist_path}")
+    print(f"[OK] ACF         : {acf_path}")
+
 
 def generate_and_save_simulated_datasets(df_base: pd.DataFrame, n_samples: int | None = None,
-                                         seed: int = 42, plot: bool = True,
-                                         save_oracle: bool = False) -> dict[str, Path]:
-    """
-    Tạo và lưu 6 file kịch bản mô phỏng.
-    - Mặc định n_samples = len(df_base) (120 dòng); giữ nguyên Month và các cột ngoại sinh, chỉ mô phỏng Quantity.
-    - n_samples khác 120: bảng ngoại sinh được mở rộng bằng extend_exogenous_features.
-    - save_oracle=True: lưu thêm dự báo Oracle (mean + quantile) theo từng tháng vào results/oracle/.
-    """
+                                         seed: int = 42, plot: bool = True, save_oracle: bool = False,
+                                         base_stats: dict | None = None, **overrides) -> dict[str, Path]:
+    """Sinh và lưu 6 file data_simulated_s{k}.csv (giữ Month & cột ngoại sinh, chỉ thay Quantity)."""
     n_base = len(df_base)
     n_eff = n_samples if (n_samples is not None and n_samples > 0) else n_base
-    base_stats = get_base_statistics(df_base)
+    bs = base_stats or get_base_statistics(df_base)
+    df_template = df_base.copy() if n_eff == n_base else extend_exogenous_features(df_base, n_eff, seed)
 
-    if n_eff == n_base:
-        df_template = df_base.copy()
-    else:
-        df_template = extend_exogenous_features(df_base, n_samples=n_eff, seed=seed)
+    print("=" * 95)
+    print(f"SINH 6 KỊCH BẢN (N={n_eff}, seed={seed}) | P={bs['season_period']} K={bs['n_harmonics']} "
+          f"AR p={bs['ar_order']} phi={np.round(bs['phi'], 3).tolist()} tau={bs['regime_break']} "
+          f"sigma_pre={bs['sigma_pre']:,.0f} sigma_post={bs['sigma_post']:,.0f}")
+    print("=" * 95)
 
-    metas, extras, simulations = {}, {}, {}
+    sims, saved = {}, {}
     for key in SCENARIO_KEYS:
-        metas[key] = {}
-        simulations[key], extras[key] = simulate_by_key(key, df_template, n_eff, base_stats, seed, meta=metas[key])
-
-    scenario_descriptions = {
-        "s1": "Kịch bản 1 (Chuẩn tĩnh - Homoscedastic Gaussian)",
-        "s2": "Kịch bản 2 (Dị phương sai bám sát tháng thật & decay biên độ)",
-        "s3": "Kịch bản 3 (Fleishman Skewness=1.0 & Kurtosis=2.0 có kiểm soát)",
-        "s4": "Kịch bản 4 (Markov Regime Shift - thời gian lưu liên tục >=18 tháng)",
-        "s5": "Kịch bản 5 (Trend + Harmonics mùa 12m & 4m thật + Cú sốc hiếm)",
-        "s6": "Kịch bản 6 (Bimodal Mixture điều khiển bởi Detrended PromotionAmount)",
-    }
-
-    saved_paths = {}
-    print("=" * 95)
-    print(f"TIẾN HÀNH TẠO 6 TẬP DỮ LIỆU MÔ PHỎNG (N={n_eff} | Target Mean={base_stats['mean']:,.2f} | Target Std={base_stats['std']:,.2f})")
-    print("=" * 95)
-
-    for key, q_vals in simulations.items():
+        meta = {}
+        y, extra = simulate_by_key(key, df_template, n_eff, bs, seed, meta=meta, **overrides)
+        sims[key] = y
         df_sim = df_template.copy()
         if "Quantity" in df_sim.columns:
-            df_sim["Quantity"] = q_vals
+            df_sim["Quantity"] = y
         else:
-            df_sim.insert(1, "Quantity", q_vals)
-
-        path_default = RAW_DATA_DIR / f"data_simulated_{key}.csv"
-        df_sim.to_csv(path_default, index=False)
-        saved_paths[key] = path_default
-
+            df_sim.insert(1, "Quantity", y)
+        path = RAW_DATA_DIR / f"data_simulated_{key}.csv"
+        df_sim.to_csv(path, index=False)
+        saved[key] = path
         if n_eff != n_base:
-            path_custom = RAW_DATA_DIR / f"data_simulated_{key}_{n_eff}.csv"
-            df_sim.to_csv(path_custom, index=False)
-
-        print(f"[{key.upper()}] {scenario_descriptions[key]}")
-        print(f"      File  : {path_default.name}")
-        print(f"      Mean  : {q_vals.mean():12.2f} | Std: {np.std(q_vals, ddof=1):12.2f} | Min: {q_vals.min():10.0f} | Max: {q_vals.max():10.0f}")
-        print(f"      Skew  : {stats.skew(q_vals):6.2f} | Kurtosis: {stats.kurtosis(q_vals):6.2f}")
-        if metas[key]["n_clipped"]:
-            print(f"      [!] {metas[key]['n_clipped']} giá trị âm đã bị clip về 0 -> mean/std lệch nhẹ")
-
-        if key == "s4":
-            print("      Regime empirical statistics after co-giãn:")
-            for reg, rst in extras[key].items():
-                print(f"        * {reg:<8}: N={rst['count']:2d} ({rst['pct']:4.1%}) | Mean={rst['mean']:10.1f} ({rst['mean_ratio']:.2f} mu) | Std={rst['std']:9.1f} ({rst['std_ratio']:.2f} sigma)")
-        elif key == "s6":
-            print(f"      Detrended driver: pi_high trung bình = {extras[key]:.3f}")
-
+            df_sim.to_csv(RAW_DATA_DIR / f"data_simulated_{key}_{n_eff}.csv", index=False)
+        print(f"[{key.upper()}] {SCENARIO_NAMES[key]} -> {path.name}")
+        print(f"      Mean={y.mean():,.0f} Std={y.std(ddof=1):,.0f} Min={y.min():,.0f} Max={y.max():,.0f} "
+              f"ACF24={_acf(y, 24):.2f} extra={extra}")
         if save_oracle:
-            orc = OracleDGP(df_base).forecast_path(metas[key])
+            orc = OracleDGP.forecast_path(meta)
             oracle_dir = RESULTS_DIR / "oracle"
             oracle_dir.mkdir(parents=True, exist_ok=True)
             pd.DataFrame(orc, index=df_template["Month"]).to_csv(oracle_dir / f"oracle_{key}.csv")
-        print("-" * 95)
 
     if plot:
-        plot_simulation_comparison(df_base, simulations, RESULTS_DIR)
-
-    return saved_paths
+        plot_simulation_comparison(df_base, sims, RESULTS_DIR)
+    return saved
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Sinh dữ liệu mô phỏng 6 kịch bản cho kiểm thử mô hình dự báo.")
-    parser.add_argument("--n_samples", type=int, default=None,
-                        help="Số lượng mẫu mô phỏng (mặc định: bằng số dòng data gốc = 120).")
-    parser.add_argument("--seed", type=int, default=42, help="Seed ngẫu nhiên.")
-    parser.add_argument("--no_plot", action="store_true", help="Không vẽ biểu đồ trực quan hóa.")
-    parser.add_argument("--monte_carlo", action="store_true", help="Chạy kiểm chứng Monte Carlo trên 100 seeds.")
-    parser.add_argument("--save_oracle", action="store_true", help="Lưu dự báo Oracle (mean + quantile) vào results/oracle/.")
+    parser = argparse.ArgumentParser(description="Sinh dữ liệu mô phỏng hiệu chỉnh theo động học chuỗi thật.")
+    parser.add_argument("--n_samples", type=int, default=None, help="Số mẫu (mặc định = số dòng dữ liệu gốc).")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--no_plot", action="store_true")
+    parser.add_argument("--monte_carlo", action="store_true", help="Kiểm chứng độ trung thực + Oracle trên nhiều seed.")
+    parser.add_argument("--n_mc_seeds", type=int, default=100)
+    parser.add_argument("--save_oracle", action="store_true")
+    parser.add_argument("--season_period", type=int, default=24)
+    parser.add_argument("--max_ar_order", type=int, default=6)
+    parser.add_argument("--calib_end", type=int, default=None, help="Chỉ hiệu chỉnh trên y[:calib_end].")
+    parser.add_argument("--regime_break", type=parse_regime_break, default="auto",
+                        help="Điểm đổi chế độ nhiễu: auto, số nguyên t, hoặc none (một chế độ).")
+    parser.add_argument("--noise_scale", type=float, default=DEFAULT_SCENARIO_PARAMS["noise_scale"])
+    parser.add_argument("--exog_beta", type=float, default=DEFAULT_SCENARIO_PARAMS["exog_beta"])
     args = parser.parse_args()
 
     df_raw = pd.read_csv(BASE_DATA_PATH)
-
+    bs = get_base_statistics(df_raw, season_period=args.season_period, max_ar_order=args.max_ar_order,
+                             calib_end=args.calib_end, regime_break=args.regime_break)
+    ov ={"noise_scale": args.noise_scale, "exog_beta": args.exog_beta}
     if args.monte_carlo:
-        run_monte_carlo_validation(df_raw, n_seeds=100)
+        run_monte_carlo_validation(df_raw, n_seeds=args.n_mc_seeds, base_stats=bs, **ov)
     else:
-        generate_and_save_simulated_datasets(
-            df_base=df_raw,
-            n_samples=args.n_samples,
-            seed=args.seed,
-            plot=not args.no_plot,
-            save_oracle=args.save_oracle,
-        )
+        generate_and_save_simulated_datasets(df_raw, n_samples=args.n_samples, seed=args.seed,
+                                             plot=not args.no_plot, save_oracle=args.save_oracle,
+                                             base_stats=bs, **ov)

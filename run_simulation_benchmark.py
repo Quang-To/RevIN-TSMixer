@@ -53,7 +53,10 @@ import optuna
 
 import config
 from src.utils.seed import set_seed
-from src.data.simulate import get_base_statistics, simulate_by_key, OracleDGP, SCENARIO_KEYS, BASE_DATA_PATH
+from src.data.simulate import (
+    get_base_statistics, simulate_by_key, OracleDGP, SCENARIO_KEYS, BASE_DATA_PATH,
+    scenario_specifications, DEFAULT_SCENARIO_PARAMS, parse_regime_break,
+)
 from src.data.dataset import WindowDataset, MultiWindowDataset
 from src.models.factory import build_model, build_model_multi
 from src.models.InventoryModel.InventoryModel import DEFAULT_QUANTILE_LEVELS
@@ -68,78 +71,9 @@ from src.hpo.objective import sample_params
 # 1. BẢNG ĐẶC TẢ TOÁN HỌC 6 KỊCH BẢN MÔ PHỎNG (SCENARIO SPECIFICATIONS)
 # ==============================================================================
 
-SCENARIO_SPECIFICATIONS = {
-    "s1": {
-        "name": "S1: Homoscedastic Gaussian i.i.d (Baseline)",
-        "dgp_formula": r"X_t = \mu + \sigma \epsilon_t, \quad \epsilon_t \sim \text{i.i.d } \mathcal{N}(0, 1)",
-        "parameters": {
-            "mu": 349023.17,
-            "sigma": 74361.57,
-            "autocorrelation": "ACF ≈ 0",
-            "seasonality": "None",
-            "trend": "None",
-        },
-        "rationale": "Kiểm tra hiện tượng quá khớp (overfitting) với nhiễu trắng thuần túy. "
-                     "Lý thuyết xác suất chỉ ra dự báo tối ưu là kỳ vọng mu; mọi nỗ lực bắt quy luật quá khứ đều là overfit.",
-    },
-    "s2": {
-        "name": "S2: Dynamic Heteroskedasticity (Dị phương sai động)",
-        "dgp_formula": r"X_t = \mu + \sigma_t \epsilon_t, \quad \sigma_t = \sigma_{\text{month}(t)} \cdot (1 - \lambda \cdot t)",
-        "parameters": {
-            "mu": 349023.17,
-            "monthly_sigma_range": "30,120 -> 118,450 VND (tỷ lệ max/min ≈ 4.0)",
-            "variance_decay_rate": "lambda ≈ 0.0035/tháng (giảm biên độ dư theo thời gian)",
-        },
-        "rationale": "Stress-test khả năng co giãn khoảng tin cậy phân vị (quantile spread) "
-                     "khi phương sai biến động mạnh theo mùa và thu hẹp dần theo thời gian.",
-    },
-    "s3": {
-        "name": "S3: Skewed & Heavy-Tailed (Fleishman System)",
-        "dgp_formula": r"X_t = \text{Affine}\left(a + b Z_t + c Z_t^2 + d Z_t^3\right), \quad Z_t \sim \mathcal{N}(0, 1)",
-        "parameters": {
-            "target_skewness": 1.0,
-            "target_excess_kurtosis": 2.0,
-            "fleishman_coefficients": {"a": -0.154, "b": 0.942, "c": 0.154, "d": 0.021},
-        },
-        "rationale": "Đánh giá độ vững (robustness) của dự báo phân vị cao (P90, P95) và định mức tồn kho "
-                     "khi phân phối nhu cầu có độ lệch dương và đuôi dày (rủi ro cú sốc cực đoan / Black Swan).",
-    },
-    "s4": {
-        "name": "S4: Markov Regime Switching (Concept Drift)",
-        "dgp_formula": r"X_t \sim \mathcal{N}(\mu_{S_t}, \sigma_{S_t}^2), \quad S_t \in \{1: \text{Normal}, 2: \text{Crisis}, 3: \text{Boom}\}",
-        "parameters": {
-            "transition_matrix_P": [[0.92, 0.05, 0.03], [0.08, 0.88, 0.04], [0.06, 0.04, 0.90]],
-            "regime_means": [1.00, 0.75, 1.25],
-            "regime_stds": [0.75, 1.40, 0.90],
-            "min_dwell_time": "18 tháng liên tục mỗi regime (tránh switching vi mô giả tạo)",
-        },
-        "rationale": "Kiểm tra năng lực thích ứng với thay đổi cấu trúc thị trường (structural breaks / concept drift) "
-                     "cả về mức nhu cầu trung bình lẫn độ bất định.",
-    },
-    "s5": {
-        "name": "S5: Trend + Seasonality + Rare Shocks (Realistic Demand)",
-        "dgp_formula": r"X_t = \text{Trend}_t + \text{Harmonics}(12\text{m}, 4\text{m}) + \text{Noise}_t + \text{Shock}_t",
-        "parameters": {
-            "linear_slope": "-291.8 đơn vị/tháng",
-            "seasonality_cycles": "12 tháng (biên độ 0.25 sigma) + 4 tháng (biên độ 0.42 sigma)",
-            "shock_probability": "p = 0.05 (Poisson/Bernoulli hiếm)",
-            "shock_magnitude": "± 2.5 sigma",
-        },
-        "rationale": "Mô phỏng sát nhất với cấu trúc chuỗi thời gian thực tế của TSI v2: "
-                     "kết hợp đồng thời trend giảm nhẹ, mùa vụ chu kỳ 4 tháng đặc thù và các cú sốc cung cầu bất thường.",
-    },
-    "s6": {
-        "name": "S6: Promotion-Driven Bimodal Mixture",
-        "dgp_formula": r"X_t \sim \pi(Z_t) \mathcal{N}(\mu_{\text{high}}, \sigma_{\text{high}}^2) + (1-\pi(Z_t)) \mathcal{N}(\mu_{\text{low}}, \sigma_{\text{low}}^2)",
-        "parameters": {
-            "separation_D": "Ashman D = 3.0 (phân tách hai đỉnh rõ rệt)",
-            "exogenous_driver": "Z_t = Detrended(PromotionAmount)",
-            "pi_high_function": r"\pi_t = \text{sigmoid}(1.5 \cdot Z_t) \in [0.10, 0.90]",
-        },
-        "rationale": "Stress-test năng lực của mô hình đa biến (TSMixer) trong việc tận dụng biến ngoại sinh "
-                     "để phân định chế độ nhu cầu cao điểm/thấp điểm so với mô hình thuần đơn biến.",
-    },
-}
+# Được điền trong main() từ tham số hiệu chỉnh thật (src.data.simulate.scenario_specifications),
+# để bảng đặc tả trong báo cáo luôn khớp với code sinh dữ liệu.
+SCENARIO_SPECIFICATIONS: Dict[str, dict] = {}
 
 
 def setup_logger(verbose: bool = True) -> logging.Logger:
@@ -181,6 +115,17 @@ def parse_args():
                         help="Thư mục xuất báo cáo CSV, JSON và Markdown")
     parser.add_argument("--quiet", action="store_true",
                         help="Giảm bớt log chi tiết")
+    # Simulation knobs (DGP hiệu chỉnh theo động học chuỗi thật)
+    parser.add_argument("--noise_scale", type=float, default=DEFAULT_SCENARIO_PARAMS["noise_scale"],
+                        help="Hệ số nhân sigma innovation (quét SNR, vd 0.5,1,2,4)")
+    parser.add_argument("--exog_beta", type=float, default=DEFAULT_SCENARIO_PARAMS["exog_beta"],
+                        help="Cường độ driver ngoại sinh trễ trong S6 (đơn vị k*sigma)")
+    parser.add_argument("--season_period", type=int, default=24,
+                        help="Chu kỳ mùa vụ P dùng để hiệu chỉnh DGP nền")
+    parser.add_argument("--calib_end", type=int, default=None,
+                        help="Chỉ hiệu chỉnh DGP trên y[:calib_end] (mặc định: toàn bộ chuỗi)")
+    parser.add_argument("--regime_break", type=parse_regime_break, default="auto",
+                        help="Điểm đổi chế độ nhiễu: auto (ước lượng từ dữ liệu), số nguyên t, hoặc none (một chế độ)")
     return parser.parse_args()
 
 
@@ -205,8 +150,16 @@ def prepare_dataloaders(
 
     if is_multi:
         from src.data.data_loader import EXOG_COLS
-        tr_df = df_full.iloc[:train_end]
-        corrs = {c: abs(float(tr_df[c].corr(pd.Series(y[:train_end])))) for c in EXOG_COLS if c in tr_df.columns}
+        # Mô hình chỉ thấy biến ngoại sinh tới t-1, nên xếp hạng theo max(|corr lag 0|, |corr lag 1|) trên Train.
+        y_tr = pd.Series(y[:train_end])
+        corrs = {}
+        for c in EXOG_COLS:
+            if c not in df_full.columns:
+                continue
+            x_tr = df_full[c].iloc[:train_end].reset_index(drop=True).astype(float)
+            c0 = abs(float(x_tr.corr(y_tr)))
+            c1 = abs(float(x_tr.shift(1).corr(y_tr)))
+            corrs[c] = np.nanmax([c0, c1])
         top_exog = sorted(corrs, key=corrs.get, reverse=True)[:6]
         Xmv = np.column_stack([y] + [df_full[c].to_numpy(dtype=float) for c in top_exog])
         col_std = Xmv[:train_end].std(axis=0)
@@ -298,6 +251,7 @@ def robust_multi_seed_hpo(
     epochs: int,
     patience: int,
     logger: logging.Logger,
+    sim_kwargs: Dict[str, Any] | None = None,
 ) -> Tuple[Dict[str, Any], float, int]:
     """
     Optuna HPO: Hàm mục tiêu là TRUNG BÌNH Pinball Loss trên tập Validation [84:96]
@@ -312,7 +266,8 @@ def robust_multi_seed_hpo(
     tuning_datasets = []
     for ts in tuning_seeds:
         meta = {}
-        y_sim, _ = simulate_by_key(scenario_key, df_base, n_samples, base_stats, seed=ts, meta=meta)
+        y_sim, _ = simulate_by_key(scenario_key, df_base, n_samples, base_stats, seed=ts, meta=meta,
+                                   **(sim_kwargs or {}))
         tuning_datasets.append((y_sim, ts))
 
     def objective(trial: optuna.Trial) -> float:
@@ -569,6 +524,26 @@ def format_pval(p: float) -> str:
 # 6. BÁO CÁO TOÀN DIỆN (MARKDOWN & CSV EXPORT)
 # ==============================================================================
 
+def build_results_digest(df_summary: pd.DataFrame, df_pairwise: pd.DataFrame) -> List[str]:
+    """Mỗi kịch bản một dòng: mô hình tốt nhất theo Pinball, RPE, và các so sánh cặp có ý nghĩa. Không có khẳng định viết cứng."""
+    out = []
+    models_only = df_summary[df_summary["model"] != "ORACLE (DGP)"]
+    for i, (sc, grp) in enumerate(models_only.groupby("scenario", sort=False), start=1):
+        g = grp.sort_values("pinball_mean")
+        best = g.iloc[0]
+        ranking = " < ".join(f"{r['model']} ({r['pinball_mean']:,.0f}, RPE {r['pinball_skill_pct']:.1f}%)" for _, r in g.iterrows())
+        sig = df_pairwise[(df_pairwise["scenario"] == sc) & (df_pairwise["metric"] == "Pinball Loss")
+                          & (df_pairwise["wilcoxon_pval"] < 0.05)]
+        sig_txt = []
+        for _, r in sig.iterrows():
+            m1, m2 = r["comparison"].split(" vs ")
+            winner, loser = (m1, m2) if r["mean_diff"] < 0 else (m2, m1)
+            sig_txt.append(f"{winner} < {loser} ({r['wilcoxon_sig']})")
+        out.append(f"{i}. **{sc}** — Thứ hạng Pinball: {ranking}. Mô hình tốt nhất: **{best['model']}**.  ")
+        out.append(f"   Khác biệt có ý nghĩa (Wilcoxon, p<0.05): {', '.join(sig_txt) if sig_txt else 'không có'}.")
+    return out
+
+
 def generate_comprehensive_report(
     df_hparams: pd.DataFrame,
     df_summary: pd.DataFrame,
@@ -677,16 +652,9 @@ def generate_comprehensive_report(
         "",
         "---",
         "",
-        "## 5. Thảo Luận Kết Quả Nghiên Cứu (Discussion & Academic Insights)",
+        "## 5. Tóm Tắt Kết Quả (sinh tự động từ số liệu, cần tác giả diễn giải thêm)",
         "",
-        "1. **Tính chất Nhiễu Nền S1 (Baseline Noise Analysis)**:  ",
-        "   Trên S1 (Gaussian i.i.d), các mô hình học sâu đạt Pinball Loss tiệm cận Oracle (Relative Pinball Efficiency > 94%), khẳng định mô hình học đúng kỳ vọng vô điều kiện mà không bị overfitting với nhiễu ngẫu nhiên.",
-        "",
-        "2. **Ưu thế Đa Biến Ngoại Sinh (TSMixer trên S6)**:  ",
-        "   Khi nhu cầu phân tách hai đỉnh theo ngân sách khuyến mãi, TSMixer vượt trội rõ rệt các mô hình đơn biến nhờ tận dụng trực tiếp đặc trưng ngoại sinh qua các khối Mixing.",
-        "",
-        "3. **Kiểm Soát Rủi Ro Đuôi Nặng (Heavy-tailed Risk trên S3)**:  ",
-        "   Trong kịch bản có Kurtosis cao, dự báo phân vị giúp giữ vững Service Level > 98% mà không làm gia tăng đột biến chi phí tồn trữ an toàn.",
+        *build_results_digest(df_summary, df_pairwise),
         "",
         "---",
         "*Báo cáo được khởi tạo tự động bởi `run_simulation_benchmark.py` phục vụ công bố khoa học.*",
@@ -717,12 +685,16 @@ def main():
 
     # Lưu bảng đặc tả kịch bản
     specs_json_path = output_dir / "scenario_specifications.json"
-    with open(specs_json_path, "w", encoding="utf-8") as f:
-        json.dump(SCENARIO_SPECIFICATIONS, f, indent=4, ensure_ascii=False)
 
     df_base = pd.read_csv(BASE_DATA_PATH)
-    base_stats = get_base_statistics(df_base)
+    base_stats = get_base_statistics(df_base, season_period=args.season_period, calib_end=args.calib_end,
+                                     regime_break=args.regime_break)
     oracle_dgp = OracleDGP(df_base)
+    sim_kwargs = {"noise_scale": args.noise_scale, "exog_beta": args.exog_beta}
+    SCENARIO_SPECIFICATIONS.clear()
+    SCENARIO_SPECIFICATIONS.update(scenario_specifications(base_stats, **sim_kwargs))
+    with open(specs_json_path, "w", encoding="utf-8") as f:
+        json.dump(SCENARIO_SPECIFICATIONS, f, indent=4, ensure_ascii=False, default=str)
 
     models = [m.strip().lower() for m in args.models.split(",") if m.strip()]
     raw_scenarios = [s.strip().lower() for s in args.scenarios.split(",") if s.strip()]
@@ -762,6 +734,7 @@ def main():
                 epochs         = args.epochs,
                 patience       = args.patience,
                 logger         = logger,
+                sim_kwargs     = sim_kwargs,
             )
             best_hparams_map[(sc, md)] = params
 
@@ -797,10 +770,22 @@ def main():
         "inventory_costs": {
             "holding_cost": config.HOLDING_COST,
             "shortage_cost": config.SHORTAGE_COST,
-            "ordering_cost": config.ORDERING_COST,
-            "lead_time": config.LEAD_TIME,
+            "policy": "order-up-to S_t = P50_t + z*sigma (sigma = RMSE), không có chi phí đặt hàng",
         },
         "split": {"train": 84, "val": 12, "test": 24},
+        "simulation": {
+            **sim_kwargs,
+            "season_period": base_stats["season_period"],
+            "n_harmonics": base_stats["n_harmonics"],
+            "ar_order": base_stats["ar_order"],
+            "phi": [float(x) for x in base_stats["phi"]],
+            "sigma": base_stats["sigma"],
+            "regime_break": base_stats["regime_break"],
+            "phi_pre": [float(x) for x in base_stats["phi_pre"]],
+            "sigma_pre": base_stats["sigma_pre"],
+            "sigma_post": base_stats["sigma_post"],
+            "calib_n": base_stats["calib_n"],
+        },
     }
     with open(output_dir / "run_provenance.json", "w", encoding="utf-8") as f:
         json.dump(provenance, f, indent=4, ensure_ascii=False)
@@ -819,11 +804,12 @@ def main():
     for sc in scenarios:
         logger.info(f"\n▶ Đang đánh giá Kịch bản: {sc.upper()} ({SCENARIO_SPECIFICATIONS[sc]['name']})")
         metric_arrays = {m: {"pinball": [], "mae": [], "mape": [], "tc": [], "rpe": [], "rce": [], "d_pb": [], "d_tc": []} for m in models}
-        oracle_metrics = {"pinball": [], "tc": []}
+        oracle_metrics = {"pinball": [], "tc": [], "mae": [], "mape": []}
 
         for s_idx, eval_seed in enumerate(eval_seeds):
             meta = {}
-            y_sim, _ = simulate_by_key(sc, df_base, len(df_base), base_stats, seed=eval_seed, meta=meta)
+            y_sim, _ = simulate_by_key(sc, df_base, len(df_base), base_stats, seed=eval_seed, meta=meta,
+                                       **sim_kwargs)
 
             # 1. Oracle Baseline trên realization dữ liệu này
             orc = oracle_dgp.forecast_path(meta, DEFAULT_QUANTILE_LEVELS)
@@ -836,6 +822,9 @@ def main():
             orc_tc = float(orc_tc)
             oracle_metrics["pinball"].append(orc_pb)
             oracle_metrics["tc"].append(orc_tc)
+            orc_point = compute_metrics(yq_orc[:, len(DEFAULT_QUANTILE_LEVELS) // 2], yt_true)
+            oracle_metrics["mae"].append(float(orc_point["MAE"]))
+            oracle_metrics["mape"].append(float(orc_point["MAPE"]))
 
             # 2. Huấn luyện lại từ đầu với siêu tham số cố định
             for md in models:
@@ -870,6 +859,7 @@ def main():
                     "scenario": sc.upper(),
                     "eval_seed": eval_seed,
                     "model": md.upper(),
+                    "best_epoch": res["best_epoch"],
                     "pinball": pb,
                     "oracle_pinball": orc_pb,
                     "delta_pinball": d_pb,
@@ -902,8 +892,8 @@ def main():
             "tc_ci95": f"[{orc_tc_lo:,.0f}, {orc_tc_hi:,.0f}]",
             "delta_cost_gap": 0.0,
             "cost_skill_pct": 100.0,
-            "mape_mean": 0.0,
-            "mae_mean": 0.0,
+            "mape_mean": float(np.mean(oracle_metrics["mape"])),
+            "mae_mean": float(np.mean(oracle_metrics["mae"])),
         })
 
         # Thống kê tổng hợp từng model

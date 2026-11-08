@@ -42,18 +42,20 @@ class _NHITSBlock(nn.Module):
 class NHITSModel(nn.Module):
     def __init__(self, seq_length: int, pred_len: int = 1,
                  hidden_dim: int = 256, n_layers: int = 3, dropout: float = 0.1,
-                 pool_kernels: tuple = (1, 2, 4), quantiles: list = DEFAULT_QUANTILES,
-                 revin_affine: bool = True, **kwargs):
+                 n_stacks: int = 3, n_blocks: int = 1, pool_kernels: tuple | None = None,
+                 quantiles: list = DEFAULT_QUANTILES, revin_affine: bool = True, **kwargs):
         super().__init__()
         self.seq_length = seq_length
         self.pred_len = pred_len
         self.quantiles = quantiles
         self.n_quantiles = len(quantiles)
 
+        # Mỗi stack ứng với một kernel pooling (1, 2, 4, ...) và gồm n_blocks block; pool_kernels tường minh sẽ thay cho n_stacks.
+        kernels = tuple(pool_kernels) if pool_kernels is not None else tuple(2 ** i for i in range(n_stacks))
         self.revin = RevIN(affine=revin_affine)
         self.blocks = nn.ModuleList([
             _NHITSBlock(seq_length, pred_len, self.n_quantiles, hidden_dim, n_layers, dropout, k)
-            for k in pool_kernels
+            for k in kernels for _ in range(n_blocks)
         ])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
