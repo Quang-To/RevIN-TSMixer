@@ -23,6 +23,25 @@ DEFAULT_FORECAST_HORIZON = 1
 GRAD_CLIP_NORM = 1.0
 
 
+def _attach_inventory_metrics(metrics: dict, total_cost: float, components: dict) -> None:
+    """Expose one stable metric schema to reports, plots, and benchmark scripts."""
+    metrics["TC_min"] = total_cost
+    metrics["Total_Cost"] = total_cost
+    metrics["Realized_TC"] = total_cost
+    metrics["TC_components"] = components
+    metrics["fill_rate"] = components.get("fill_rate", np.nan)
+    metrics["Fill_Rate"] = metrics["fill_rate"]
+    metrics["cycle_service_level"] = components.get("cycle_service_level", np.nan)
+    metrics["Cycle_Service_Level"] = metrics["cycle_service_level"]
+    metrics["ECE"] = metrics.get("mean_calibration_error", np.nan)
+    metrics["Cov_P5_P95"] = metrics.get("coverage_P95", 0.0) - metrics.get("coverage_P5", 0.0)
+    metrics["Cov_P10_P90"] = metrics.get("coverage_P90", 0.0) - metrics.get("coverage_P10", 0.0)
+    metrics["Cov_P25_P75"] = metrics.get("coverage_P75", 0.0) - metrics.get("coverage_P25", 0.0)
+    metrics["interval_coverage_P5_P95"] = metrics["Cov_P5_P95"]
+    metrics["interval_coverage_P10_P90"] = metrics["Cov_P10_P90"]
+    metrics["interval_coverage_P25_P75"] = metrics["Cov_P25_P75"]
+
+
 class BaseTrainer(ABC):
     def __init__(self, seq_length: int = 24, batch_size: int = 16, lr: float = 1e-3,
                  epochs: int = 300, patience: int = 30, holding_cost: float = 4_000.0,
@@ -269,14 +288,7 @@ class BaseTrainer(ABC):
             ordering_cost=self.ordering_cost,
             lead_time=self.lead_time,
         )
-        metrics["TC_min"] = tc
-        metrics["Total_Cost"] = tc
-        metrics["Fill_Rate"] = tc_components.get("fill_rate", np.nan)
-        metrics["Cycle_Service_Level"] = tc_components.get("cycle_service_level", np.nan)
-        metrics["ECE"] = metrics.get("mean_calibration_error", np.nan)
-        metrics["Cov_P5_P95"] = metrics.get("coverage_P95", 0.0) - metrics.get("coverage_P5", 0.0)
-        metrics["Cov_P10_P90"] = metrics.get("coverage_P90", 0.0) - metrics.get("coverage_P10", 0.0)
-        metrics["Cov_P25_P75"] = metrics.get("coverage_P75", 0.0) - metrics.get("coverage_P25", 0.0)
+        _attach_inventory_metrics(metrics, tc, tc_components)
 
         if verbose:
             logging.info(f"\n[Result] Best Epoch={best_epoch} | Best Val Loss={best_val:.4f} | Test MAE={metrics['MAE']:.0f} | Test MAPE={metrics['MAPE']:.2f}% | Test Pinball={metrics['PinballLoss']:.0f} | TC={tc:,.0f}")
@@ -335,7 +347,7 @@ class BaseTrainer(ABC):
             holding_cost=self.holding_cost, shortage_cost=self.shortage_cost,
             ordering_cost=self.ordering_cost, lead_time=self.lead_time,
         )
-        metrics["TC_min"] = tc
+        _attach_inventory_metrics(metrics, tc, tc_comp)
         return {
             "metrics": metrics,
             "test_pred": yp,

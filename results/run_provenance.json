@@ -1,5 +1,5 @@
 {
-    "timestamp": "2026-11-07 21:08:15",
+    "timestamp": "2026-11-08 13:07:01",
     "tuning_seeds": [
         1000,
         1001,
@@ -53,10 +53,9 @@
         "nhits"
     ],
     "inventory_costs": {
-        "holding_cost": 4.0,
-        "shortage_cost": 30.0,
-        "ordering_cost": 50000.0,
-        "lead_time": 1
+        "holding_cost": 4000.0,
+        "shortage_cost": 30000.0,
+        "policy": "order-up-to S_t = P50_t + z*sigma (sigma = RMSE), không có chi phí đặt hàng"
     },
     "split": {
         "train": 84,
@@ -67,17 +66,20 @@
         "noise_scale": 1.0,
         "exog_beta": 1.0,
         "season_period": 24,
-        "n_harmonics": 11,
-        "ar_order": 6,
+        "n_harmonics": 12,
+        "ar_order": 5,
         "phi": [
-            0.30548654055847246,
-            -0.26505066297426416,
-            -0.13070283687424122,
-            -0.2892316824398131,
-            0.23774973280641248,
-            -0.199692180159702
+            0.7813773376926778,
+            -0.6437853294505563,
+            0.31978983954313706,
+            -0.07955858016913286,
+            0.20098796071779693
         ],
-        "sigma": 35429.4411423272,
+        "sigma": 54878.296937110434,
+        "regime_break": 36,
+        "phi_pre": [],
+        "sigma_pre": 97822.43638734221,
+        "sigma_post": 4832.528762943431,
         "calib_n": 120
     }
 }

@@ -11,14 +11,19 @@ venv/
 .vscode/
 .idea/
 
-# dataset
+# generated datasets and local data
 data/raw/
+data/raw_data/*.csv
+!data/raw_data/data_TSI_v2.csv
 
 # model outputs
 checkpoints/
 logs/
+results/*.png
+results/oracle/
 
 # system
 .DS_Store
 
+# large model artifacts
 checkpoints_optuna/*.pt

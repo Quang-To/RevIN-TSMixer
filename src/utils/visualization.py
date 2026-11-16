@@ -14,9 +14,10 @@ plt.rcParams['font.size'] = 10
 class TrainingVisualizer:
     """Visualize training metrics and predictions."""
     
-    def __init__(self, save_dir: str = "results"):
+    def __init__(self, save_dir: str = "results", data_file: str | None = None):
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
+        self.data_file = data_file
         
         # Track metrics during training
         self.train_losses: List[float] = []
@@ -34,10 +35,12 @@ class TrainingVisualizer:
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
         
         # Plot 1: Training Loss
-        axes[0].plot(self.epochs, self.train_losses, 'o-', linewidth=2, 
-                     markersize=6, color='#2E86AB', label='Train Loss (MAPE)')
+        train_label = "Train Loss (MAPE)" if scenario == 1 else "Train Loss (Pinball)"
+        axes[0].plot(self.epochs, self.train_losses, 'o-', linewidth=2,
+                     markersize=6, color='#2E86AB', label=train_label)
         axes[0].set_xlabel('Epoch', fontsize=11, fontweight='bold')
-        axes[0].set_ylabel('MAPE Loss (%)', fontsize=11, fontweight='bold')
+        axes[0].set_ylabel('MAPE Loss (%)' if scenario == 1 else 'Pinball Loss',
+                            fontsize=11, fontweight='bold')
         axes[0].set_title('Training Loss Over Epochs', fontsize=12, fontweight='bold')
         axes[0].grid(True, alpha=0.3)
         axes[0].legend()
@@ -136,7 +139,7 @@ class TrainingVisualizer:
         from statsmodels.tsa.seasonal import STL
         from src.data.data_loader import data_loader
 
-        df = data_loader().copy()
+        df = data_loader(self.data_file).copy()
         df["Month"] = pd.to_datetime(df["Month"])
         df = df.sort_values("Month")
         stl = STL(df["Quantity"].astype(float), period=12, robust=True).fit()

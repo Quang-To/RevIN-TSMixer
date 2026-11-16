@@ -1,23 +1,25 @@
 {
     "s1": {
         "name": "S1: Calibrated Base (Trend + Seasonal + AR, bootstrap noise)",
-        "dgp_formula": "y_t=\\max(0,m_t+u_t),\\ m_t=a+bt+\\sum_{k\\le K}[c_k\\sin\\tfrac{2\\pi kt}{P}+d_k\\cos\\tfrac{2\\pi kt}{P}],\\ u_t=\\sum_{j\\le p}\\phi_j u_{t-j}+k\\sigma s_t\\varepsilon_t,\\ \\varepsilon_t\\sim\\hat F_{\\text{resid}}",
+        "dgp_formula": "y_t=\\max(0,m_t+u_t),\\ m_t=a+bt+\\sum_{k\\le K}[c_k\\sin\\tfrac{2\\pi kt}{P}+d_k\\cos\\tfrac{2\\pi kt}{P}],\\ u_t=\\sum_{j\\le p}\\phi_j u_{t-j}+k\\sigma_t s_t\\varepsilon_t,\\ \\sigma_t=\\sigma_{\\text{pre}}\\mathbb 1[t<\\tau_\\sigma]+\\sigma_{\\text{post}}\\mathbb 1[t\\ge\\tau_\\sigma],\\ \\varepsilon_t\\sim\\hat F_{\\text{resid}}",
         "parameters": {
             "season_period_P": 24,
-            "n_harmonics_K (BIC)": 11,
-            "trend_slope": "-247.3 / tháng",
-            "ar_order_p (BIC)": 6,
+            "n_harmonics_K (BIC)": 12,
+            "trend_slope": "-106.5 / tháng",
+            "ar_order_p (BIC)": 5,
             "phi": [
-                0.305,
-                -0.265,
-                -0.131,
-                -0.289,
-                0.238,
-                -0.2
+                0.781,
+                -0.644,
+                0.32,
+                -0.08,
+                0.201
             ],
-            "ar_spectral_radius": 0.833,
-            "sigma_innov": "35,429 (x noise_scale=1.0)",
-            "R2_deterministic / R2_total (calib)": "0.63 / 0.77",
+            "ar_spectral_radius": 0.828,
+            "regime_break_tau": 36,
+            "phi_pre (trước tau)": [],
+            "sigma_innov_pre": "97,822 (x noise_scale=1.0)",
+            "sigma_innov_post": "4,833 (x noise_scale=1.0)",
+            "R2_deterministic / R2_total (calib)": "0.48 / 0.46",
             "calibration_sample": "y[0:120]"
         },
         "rationale": "Kịch bản nền tái tạo cấu trúc trend/mùa vụ/tự tương quan của dữ liệu thật; đo năng lực khai thác cấu trúc động khi nhiễu có hình dạng thực tế."
@@ -27,7 +29,7 @@
         "dgp_formula": "\\text{Base},\\ s_t=h_{\\text{month}(t)}^{\\gamma}",
         "parameters": {
             "gamma (hetero_power)": 1.0,
-            "max/min scale ratio": 5.5
+            "max/min scale ratio": 2.78
         },
         "rationale": "Kiểm tra khả năng co giãn độ rộng khoảng phân vị theo tháng."
     },
@@ -73,7 +75,7 @@
     },
     "s6": {
         "name": "S6: Base + Lagged Exogenous Driver (Promotion)",
-        "dgp_formula": "\\text{Base},\\ m_t\\mathrel{+}=\\beta k\\sigma\\,\\tilde g(z_{t-\\ell}),\\ \\tilde g=\\text{std}(\\tanh z)",
+        "dgp_formula": "\\text{Base},\\ m_t\\mathrel{+}=\\beta k\\sigma_t\\,\\tilde g(z_{t-\\ell}),\\ \\tilde g=\\text{std}(\\tanh z)",
         "parameters": {
             "beta (exog_beta)": 1.0,
             "lag": 1,
