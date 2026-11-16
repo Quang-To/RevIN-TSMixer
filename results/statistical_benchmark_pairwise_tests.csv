@@ -1,0 +1,3 @@
+﻿scenario,comparison,metric,mean_diff,win_rate_m1_pct,wilcoxon_stat,wilcoxon_pval,wilcoxon_sig,t_pval
+S1,TSMIXER vs NBEATS,Pinball Loss,322.83765531994067,40.0,6.0,0.8125,0.8125 (ns),0.7028619614959646
+S1,TSMIXER vs NBEATS,Total Cost,349511.5122728281,20.0,5.0,0.625,0.6250 (ns),0.773903037572424

@@ -1,0 +1,85 @@
+{
+    "timestamp": "2026-11-08 13:07:01",
+    "tuning_seeds": [
+        1000,
+        1001,
+        1002
+    ],
+    "n_trials_hpo": 50,
+    "n_eval_seeds": 30,
+    "eval_seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29
+    ],
+    "scenarios": [
+        "s1",
+        "s2",
+        "s3",
+        "s4",
+        "s5",
+        "s6"
+    ],
+    "models": [
+        "tsmixer",
+        "nbeats",
+        "nhits"
+    ],
+    "inventory_costs": {
+        "holding_cost": 4000.0,
+        "shortage_cost": 30000.0,
+        "policy": "order-up-to S_t = P50_t + z*sigma (sigma = RMSE), không có chi phí đặt hàng"
+    },
+    "split": {
+        "train": 84,
+        "val": 12,
+        "test": 24
+    },
+    "simulation": {
+        "noise_scale": 1.0,
+        "exog_beta": 1.0,
+        "season_period": 24,
+        "n_harmonics": 12,
+        "ar_order": 5,
+        "phi": [
+            0.7813773376926778,
+            -0.6437853294505563,
+            0.31978983954313706,
+            -0.07955858016913286,
+            0.20098796071779693
+        ],
+        "sigma": 54878.296937110434,
+        "regime_break": 36,
+        "phi_pre": [],
+        "sigma_pre": 97822.43638734221,
+        "sigma_post": 4832.528762943431,
+        "calib_n": 120
+    }
+}

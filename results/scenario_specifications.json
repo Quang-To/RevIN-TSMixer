@@ -1,0 +1,87 @@
+{
+    "s1": {
+        "name": "S1: Calibrated Base (Trend + Seasonal + AR, bootstrap noise)",
+        "dgp_formula": "y_t=\\max(0,m_t+u_t),\\ m_t=a+bt+\\sum_{k\\le K}[c_k\\sin\\tfrac{2\\pi kt}{P}+d_k\\cos\\tfrac{2\\pi kt}{P}],\\ u_t=\\sum_{j\\le p}\\phi_j u_{t-j}+k\\sigma_t s_t\\varepsilon_t,\\ \\sigma_t=\\sigma_{\\text{pre}}\\mathbb 1[t<\\tau_\\sigma]+\\sigma_{\\text{post}}\\mathbb 1[t\\ge\\tau_\\sigma],\\ \\varepsilon_t\\sim\\hat F_{\\text{resid}}",
+        "parameters": {
+            "season_period_P": 24,
+            "n_harmonics_K (BIC)": 12,
+            "trend_slope": "-106.5 / tháng",
+            "ar_order_p (BIC)": 5,
+            "phi": [
+                0.781,
+                -0.644,
+                0.32,
+                -0.08,
+                0.201
+            ],
+            "ar_spectral_radius": 0.828,
+            "regime_break_tau": 36,
+            "phi_pre (trước tau)": [],
+            "sigma_innov_pre": "97,822 (x noise_scale=1.0)",
+            "sigma_innov_post": "4,833 (x noise_scale=1.0)",
+            "R2_deterministic / R2_total (calib)": "0.48 / 0.46",
+            "calibration_sample": "y[0:120]"
+        },
+        "rationale": "Kịch bản nền tái tạo cấu trúc trend/mùa vụ/tự tương quan của dữ liệu thật; đo năng lực khai thác cấu trúc động khi nhiễu có hình dạng thực tế."
+    },
+    "s2": {
+        "name": "S2: Base + Seasonal Heteroscedasticity",
+        "dgp_formula": "\\text{Base},\\ s_t=h_{\\text{month}(t)}^{\\gamma}",
+        "parameters": {
+            "gamma (hetero_power)": 1.0,
+            "max/min scale ratio": 2.78
+        },
+        "rationale": "Kiểm tra khả năng co giãn độ rộng khoảng phân vị theo tháng."
+    },
+    "s3": {
+        "name": "S3: Base + Heavy-tailed Innovations (Student-t)",
+        "dgp_formula": "\\text{Base},\\ \\varepsilon_t\\sim t_\\nu\\sqrt{(\\nu-2)/\\nu}",
+        "parameters": {
+            "nu (t_df)": 3.0
+        },
+        "rationale": "Kiểm tra độ vững của phân vị đuôi (P5/P95) và chi phí tồn kho khi nhiễu đuôi dày."
+    },
+    "s4": {
+        "name": "S4: Base + Level Shift in Test Period",
+        "dgp_formula": "\\text{Base},\\ m_t\\mathrel{+}=\\delta\\,\\mathbb 1[t\\ge\\tau]",
+        "parameters": {
+            "|delta| / mean": [
+                0.15,
+                0.25
+            ],
+            "tau / n": [
+                0.8,
+                0.9
+            ],
+            "sign": "ngẫu nhiên ±"
+        },
+        "rationale": "Concept drift xảy ra trong giai đoạn test; đo khả năng thích ứng (vd. RevIN) khi mức nhu cầu đổi đột ngột."
+    },
+    "s5": {
+        "name": "S5: Base + Trend Break",
+        "dgp_formula": "\\text{Base},\\ m_t\\mathrel{+}=\\Delta_b\\max(0,t-\\tau)",
+        "parameters": {
+            "|Delta_b| / mean per month": [
+                0.004,
+                0.008
+            ],
+            "tau / n": [
+                0.7,
+                0.8
+            ],
+            "sign": "ngẫu nhiên ±"
+        },
+        "rationale": "Gãy trend quanh ranh giới train/val: mô hình phải ngoại suy độ dốc mới."
+    },
+    "s6": {
+        "name": "S6: Base + Lagged Exogenous Driver (Promotion)",
+        "dgp_formula": "\\text{Base},\\ m_t\\mathrel{+}=\\beta k\\sigma_t\\,\\tilde g(z_{t-\\ell}),\\ \\tilde g=\\text{std}(\\tanh z)",
+        "parameters": {
+            "beta (exog_beta)": 1.0,
+            "lag": 1,
+            "driver": "PromotionAmount khử trend tuyến tính, chuẩn hóa median/IQR",
+            "share of innovation variance": 0.5
+        },
+        "rationale": "Đo lợi ích của mixing đa biến: chỉ mô hình nhìn thấy biến ngoại sinh trễ mới khai thác được phần tín hiệu này."
+    }
+}

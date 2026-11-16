@@ -1,0 +1,36 @@
+Scenario 2 — Model NBEATS — Rank 2
+==================================================
+
+── Loss Configuration ──────────────────────────
+  Val Metric  : PINBALL
+  Model       : NBEATS
+
+── Hyperparameters ─────────────────────────────
+  lookback    : 13
+  learning_rate: 0.007969454818643935
+  batch_size  : 16
+  revin_affine: True
+  hidden_size : 128
+  n_layers    : 3
+  dropout     : 0.069
+  n_stacks    : 2
+  n_blocks    : 3
+
+── Fold best epochs ────────────────────────────
+  epochs      : [9]
+  median      : 9
+  final epochs: 9
+
+── Validation metric (CV mean) ──────────────────
+  TC_min      : 0.0397
+
+── CV fold statistics ───────────────────────────
+  fold mean   : 0.0000
+  fold std    : 0.0000
+  fold min    : 0.0000
+  fold max    : 0.0000
+
+── Final evaluation ───────────────────────────
+  final_epochs: 9
+  final_Tc_min: 15913391.5923
+  final_MAPE  : 17.9046
